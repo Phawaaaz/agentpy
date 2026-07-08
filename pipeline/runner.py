@@ -1,0 +1,217 @@
+"""PipelineRunner: the outer, multi-stage autonomous loop.
+
+Composes the existing, unmodified core.orchestrator.Orchestrator -- each
+stage/iteration is one fresh, bounded Orchestrator.run() call. This file adds
+no new capability to the base loop; it calls it repeatedly with safety rails
+around the calling pattern (stuck detection, iteration caps, a wall-clock
+timeout, and repair caps on test failures) -- an optional layer on top,
+exactly what DESIGN.md D1 asks for instead of complicating the base loop.
+
+Stops before push/PR by design (v1 scope): ends with a committed branch in an
+isolated worktree and a summary, for a human to review and push themselves.
+"""
+
+import contextlib
+import os
+import re
+import time
+import uuid
+from dataclasses import dataclass
+
+from config import Config
+from core.context import Conversation, make_provider_summarizer
+from core.orchestrator import Orchestrator
+from pipeline import stages, worktree
+from pipeline.config import PipelineConfig
+from pipeline.state import ProgressLog, SliceState
+from providers.base import Provider
+from tools.registry import Registry
+
+_COMPLETE_RE = re.compile(r"<promise>\s*complete\s*</promise>", re.IGNORECASE)
+_ABORT_RE = re.compile(r"<promise>\s*abort\s*</promise>", re.IGNORECASE)
+_TESTS_FAIL_RE = re.compile(r"<tests>\s*fail\s*</tests>", re.IGNORECASE)
+
+
+@contextlib.contextmanager
+def _cwd(path: str):
+    """Pipeline slices run sequentially (v1 has no parallel slices), so a
+    plain chdir is safe: only one slice is ever active at a time."""
+    previous = os.getcwd()
+    os.chdir(path)
+    try:
+        yield
+    finally:
+        os.chdir(previous)
+
+
+@dataclass
+class SliceResult:
+    status: str  # complete | aborted | stuck | max_iterations | timeout
+    stage: str
+    iterations: int
+    worktree_path: str
+    branch: str
+    diff_stat: str
+    summary: str
+
+
+class PipelineRunner:
+    def __init__(
+        self,
+        provider: Provider,
+        registry: Registry,
+        harness_config: Config,
+        pipeline_config: PipelineConfig | None = None,
+        state_dir: str = ".harness/pipeline",
+        on_event=None,
+    ) -> None:
+        self.provider = provider
+        self.registry = registry
+        self.harness_config = harness_config
+        self.pipeline_config = pipeline_config or PipelineConfig.load()
+        self.state_dir = state_dir
+        self.on_event = on_event or (lambda *a, **k: None)
+
+    def run(self, task: str) -> SliceResult:
+        slice_id = f"{int(time.time())}-{uuid.uuid4().hex[:8]}"
+        repo_root = worktree.repo_root(".")
+        worktree_path, branch = worktree.create_worktree(repo_root, slice_id)
+        state = SliceState(slice_id=slice_id, task=task, branch=branch, worktree_path=worktree_path)
+        progress = ProgressLog(self.state_dir, slice_id)
+        state.save(self.state_dir)
+        self.on_event("slice_started", slice_id, worktree_path, branch)
+
+        status = self._implement_loop(worktree_path, task, progress, state)
+        state.status = status
+        state.save(self.state_dir)
+
+        if status == "complete":
+            self._run_outer_stages(worktree_path, task, progress, state)
+
+        diff = worktree.diff_stat(worktree_path)
+        summary = (
+            f"slice {slice_id}: stage={state.stage} status={state.status} "
+            f"iterations={state.iteration} branch={branch}"
+        )
+        self.on_event("slice_finished", slice_id, state.status, diff)
+        return SliceResult(
+            status=state.status,
+            stage=state.stage,
+            iterations=state.iteration,
+            worktree_path=worktree_path,
+            branch=branch,
+            diff_stat=diff,
+            summary=summary,
+        )
+
+    # --- stages -------------------------------------------------------
+
+    def _run_stage(self, cwd: str, prompt: str) -> str:
+        """One fresh, bounded Orchestrator.run() call, rooted at `cwd`.
+
+        No human is present during an autonomous run, so an "ask" decision
+        must be denied, not silently approved -- fail safe, not fail open.
+        Run with HARNESS_PERMISSION_MODE=allowlist or auto for the pipeline
+        to make real progress (see interfaces/pipeline_cli.py's warning).
+        """
+        conversation = Conversation(
+            self.harness_config.system_prompt,
+            max_context_tokens=self.harness_config.max_context_tokens,
+            keep_recent_messages=self.harness_config.keep_recent_messages,
+            summarizer=make_provider_summarizer(self.provider),
+        )
+        agent = Orchestrator(
+            self.provider,
+            self.registry,
+            self.harness_config,
+            approver=lambda call, tool: False,
+            on_event=self.on_event,
+            conversation=conversation,
+        )
+        with _cwd(cwd):
+            return agent.run(prompt)
+
+    def _implement_loop(
+        self, worktree_path: str, task: str, progress: ProgressLog, state: SliceState
+    ) -> str:
+        cfg = self.pipeline_config
+        stuck_count = 0
+        deadline = time.monotonic() + cfg.slice_timeout_s
+
+        for iteration in range(1, cfg.max_iterations + 1):
+            if time.monotonic() > deadline:
+                self.on_event("slice_timeout", iteration)
+                return "timeout"
+
+            state.iteration = iteration
+            state.stage = "implement"
+            state.save(self.state_dir)
+
+            diff_before = worktree.diff_stat(worktree_path)
+            prompt = stages.implement_prompt(task, progress.read(), diff_before, iteration)
+            answer = self._run_stage(worktree_path, prompt)
+            progress.append(f"[implement iteration {iteration}]\n{answer}")
+
+            if worktree.has_uncommitted_changes(worktree_path):
+                worktree.commit_all(worktree_path, f"pipeline: iteration {iteration}")
+                stuck_count = 0
+            else:
+                stuck_count += 1
+
+            if _ABORT_RE.search(answer):
+                self.on_event("slice_aborted", iteration, answer)
+                return "aborted"
+            if _COMPLETE_RE.search(answer):
+                self.on_event("slice_complete", iteration)
+                return "complete"
+            if stuck_count >= cfg.stuck_after:
+                self.on_event("slice_stuck", iteration, stuck_count)
+                return "stuck"
+
+        self.on_event("slice_max_iterations", cfg.max_iterations)
+        return "max_iterations"
+
+    def _run_outer_stages(
+        self, worktree_path: str, task: str, progress: ProgressLog, state: SliceState
+    ) -> None:
+        def run_and_commit(stage_name: str, prompt: str, commit_message: str) -> str:
+            state.stage = stage_name
+            state.save(self.state_dir)
+            answer = self._run_stage(worktree_path, prompt)
+            progress.append(f"[{stage_name}]\n{answer}")
+            if worktree.has_uncommitted_changes(worktree_path):
+                worktree.commit_all(worktree_path, commit_message)
+            return answer
+
+        diff = worktree.diff_stat(worktree_path)
+        run_and_commit("self_review", stages.self_review_prompt(task, diff), "pipeline: self-review fixes")
+
+        diff = worktree.diff_stat(worktree_path)
+        run_and_commit("verify", stages.verify_prompt(task, diff), "pipeline: verify fixes")
+
+        state.stage = "test"
+        state.save(self.state_dir)
+        max_attempts = self.pipeline_config.max_repair_attempts
+        for attempt in range(1, max_attempts + 2):  # +1 initial test run, then repairs
+            diff = worktree.diff_stat(worktree_path)
+            test_answer = run_and_commit(
+                "test", stages.test_prompt(task, diff), f"pipeline: test attempt {attempt}"
+            )
+            if not _TESTS_FAIL_RE.search(test_answer):
+                break
+            if attempt > max_attempts:
+                self.on_event("repair_exhausted", attempt)
+                break
+            state.repair_attempt = attempt
+            state.save(self.state_dir)
+            run_and_commit(
+                "repair",
+                stages.repair_prompt(task, test_answer, progress.read()),
+                f"pipeline: repair attempt {attempt}",
+            )
+
+        diff = worktree.diff_stat(worktree_path)
+        run_and_commit("sync_docs", stages.sync_docs_prompt(task, diff), "pipeline: sync docs")
+
+        state.stage = "done"
+        state.save(self.state_dir)

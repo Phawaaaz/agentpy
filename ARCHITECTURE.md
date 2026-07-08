@@ -15,11 +15,13 @@ is added as new tools, providers, and interfaces at the edges.**
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│ interfaces/     CLI now; Slack / HTTP API later                │  ← talks to humans/systems
+│ interfaces/     CLI + pipeline CLI now; Slack / HTTP API later  │  ← talks to humans/systems
+├──────────────────────────────────────────────────────────────┤
+│ pipeline/       multi-stage autonomous loop (composes core/)   │  ← optional outer layer
 ├──────────────────────────────────────────────────────────────┤
 │ core/           orchestrator (the loop) + permissions          │  ← policy / control flow
 ├──────────────────────────────────────────────────────────────┤
-│ tools/          registry + dispatcher + the tools              │  ← the agent's hands
+│ tools/          registry + dispatcher + the tools + MCP client │  ← the agent's hands
 ├──────────────────────────────────────────────────────────────┤
 │ providers/      Provider interface + per-model adapters        │  ← the agent's mouth/ears
 └──────────────────────────────────────────────────────────────┘
@@ -27,6 +29,10 @@ is added as new tools, providers, and interfaces at the edges.**
    store/          session persistence (save/resume conversations)   ┐ cross-cutting:
    observability/  usage/cost tracking + event logging              ┘ touch every layer
 ```
+
+`pipeline/` sits *above* `core/`, not inside it: it calls `Orchestrator.run()`
+repeatedly (once per stage/iteration) instead of changing what the loop does.
+See D15 in [DESIGN.md](DESIGN.md).
 
 Dependencies point **downward and inward, toward abstractions**. `core/` depends
 on the `Provider` interface and the `Registry`, never on a concrete provider or
@@ -44,13 +50,19 @@ an interface. Wiring happens only in `interfaces/` via `providers/factory.py`.
 | `tools/registry.py` | `Tool`, `Registry`, `registry` | Hold tool schemas; dispatch by name |
 | `tools/filesystem.py` | read/write/edit/list | Filesystem tools (self-register) |
 | `tools/shell.py` | run_command | Shell tool (self-register) |
+| `tools/mcp_client.py` | `MCPManager`, `MCPServerConfig` | Connect to MCP servers; register/deregister their tools (D14) |
 | `core/permissions.py` | `check` | allow / ask / deny decision |
 | `core/context.py` | `Conversation`, `make_provider_summarizer` | Hold history; compact it when over budget |
 | `core/orchestrator.py` | `Orchestrator` | The agent loop + tool gating |
 | `store/session_store.py` | `SessionStore` | Save/load a conversation as JSON |
 | `observability/usage.py` | `UsageTracker`, `cost_for` | Accumulate tokens; estimate spend |
 | `observability/log.py` | `EventLogger` | Append a JSONL trace of events |
-| `interfaces/cli.py` | `main`, `Session` | Terminal I/O, approvals, session commands, wiring |
+| `interfaces/cli.py` | `main`, `Session` | Terminal I/O, approvals, session commands, MCP wiring |
+| `pipeline/runner.py` | `PipelineRunner` | Outer multi-stage loop: implement → self-review → verify → test → sync-docs (D15) |
+| `pipeline/worktree.py` | worktree/commit helpers | Isolated git worktree per slice; the stuck-detection signal |
+| `pipeline/state.py` | `SliceState`, `ProgressLog` | Persist slice status + an append-only progress trail |
+| `pipeline/stages.py` | stage prompt builders | One prompt template per stage |
+| `interfaces/pipeline_cli.py` | `main` | `python pipeline.py "<task>"` entry point |
 
 ## The request lifecycle
 
@@ -127,6 +139,52 @@ If you add a provider, its job is entirely: **neutral in, neutral out.**
 Each `Tool` also carries a `risk` (`safe` | `write` | `dangerous`) that drives
 the permission layer. Handlers receive validated kwargs and **return a string**.
 
+## MCP tools (dynamic, not self-registered)
+
+Built-in tools self-register on import (D8). MCP server tools don't exist
+until you connect, so `MCPManager.connect(config)` registers them at runtime
+instead, namespaced `mcp__<server>__<tool>` (same convention this very
+session's own MCP tools use) so they can't collide with a built-in tool or
+another server's tool of the same name. Risk is derived from the server's own
+MCP tool annotations when present, else assumed `write` (D14) — from there
+they're indistinguishable from any other `Tool` to the orchestrator and
+permission layer. `disconnect(name)` deregisters them; `list_connected()`
+reports what's live. The CLI wires this at startup from `.harness/mcp.json`
+(see `mcp.json.example`) and via `/mcp`, `/mcp connect`, `/mcp disconnect`.
+
+## The pipeline (outer loop, optional)
+
+`pipeline/` is a second entry point (`python pipeline.py "<task>"`,
+`interfaces/pipeline_cli.py`) for autonomous multi-stage work, sitting above
+`core/` rather than inside it. One `PipelineRunner.run(task)` call:
+
+```
+create an isolated git worktree + branch
+  │
+  ▼  implement loop (bounded by max_iterations / slice_timeout_s)
+  │   each iteration: fresh Orchestrator.run() seeded with the task,
+  │   progress.log, and the current `git diff --stat`
+  │   no uncommitted change this iteration? -> stuck_count++
+  │   any change?  -> commit it, stuck_count = 0
+  │   answer contains <promise>COMPLETE</promise> -> stop, proceed below
+  │   answer contains <promise>ABORT</promise>    -> stop, report why
+  │   stuck_count >= stuck_after                  -> stop ("stuck")
+  │   iteration > max_iterations                  -> stop ("max_iterations")
+  ▼
+self_review -> verify -> test  (each: one fresh Orchestrator.run(), commit if changed)
+  │   test answer contains <tests>FAIL</tests> -> repair (bounded by
+  │   max_repair_attempts), re-run test, repeat
+  ▼
+sync_docs -> stop (no push/PR in v1 — hand back the committed branch)
+```
+
+Every stage is an ordinary, bounded call to the *unmodified*
+`core.orchestrator.Orchestrator` — the pipeline adds no new capability to the
+loop itself, only a calling pattern around it (D15). Because no human is
+present to answer an "ask" permission decision during an autonomous run, the
+pipeline's approver always denies rather than always allows; run with
+`HARNESS_PERMISSION_MODE=allowlist` or `auto` for it to make progress.
+
 ## Extension points (where new work goes)
 
 | To add… | Do this | Files touched |
@@ -156,7 +214,9 @@ Step-by-step recipes are in [CONTRIBUTING.md](CONTRIBUTING.md).
   tools, CLI, smoke test.
 - **Phase 2 (done):** context management (history compaction), session
   persistence, observability + cost tracking, `fetch_url` web tool.
-- **Phase 3:** integrations (Jira, DB, Drive), HTTP API, per-user config, Slack
-  interface, web *search*.
+- **Phase 3 (in progress):** MCP client (`tools/mcp_client.py`, dynamic
+  tools), autonomous multi-stage pipeline (`pipeline/`, stops before push/PR).
+  Still open: HTTP API, per-user config, Slack interface, web *search*,
+  pipeline push/PR automation, cross-model review, parallel slices.
 
 These phases slot into the existing folders without reshaping the loop.

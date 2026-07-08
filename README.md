@@ -15,10 +15,11 @@ minimal and grow into a company-wide coding + automation assistant.
 ## Architecture
 
 ```
-interfaces/     thin entry points (CLI now; Slack / API later)
+interfaces/     thin entry points (CLI, pipeline CLI now; Slack / API later)
 core/           orchestrator (the loop) + permissions + context (compaction)
-tools/          registry + the tools (filesystem, shell, fetch_url, ...)
+tools/          registry + the tools (filesystem, shell, fetch_url, MCP client, ...)
 providers/      model abstraction (anthropic + openai SDKs => any model)
+pipeline/       optional outer loop: multi-stage autonomous runs
 store/          session persistence (save/resume conversations)
 observability/  token usage + cost estimate + event logging
 config.py       model, key, permission mode, limits
@@ -55,6 +56,35 @@ python main.py
 
 Then type a task, e.g. *"list the files here and tell me what this project is."*
 
+## MCP servers
+
+Connect external [MCP](https://modelcontextprotocol.io) servers so their
+tools show up alongside the built-in ones. Copy `mcp.json.example` to
+`.harness/mcp.json` (or point `HARNESS_MCP_CONFIG` elsewhere) and list your
+servers — local (stdio, launched as a subprocess) or remote (`http`/`sse`).
+They connect automatically on startup; `/mcp`, `/mcp connect <name>`, and
+`/mcp disconnect <name>` manage them at runtime. Their tools are namespaced
+`mcp__<server>__<tool>` and go through the same permission modes as everything
+else (risk is inferred from the server's own tool annotations, defaulting to
+`write` when it doesn't say).
+
+## Autonomous pipeline
+
+For a task you want worked end-to-end unattended:
+
+```bash
+python pipeline.py "add a health check endpoint and its test"
+```
+
+This runs a multi-stage loop — implement (iterating with stuck/timeout
+safety rails) → self-review → verify → test (with a bounded repair loop on
+failure) → sync-docs — inside an isolated git worktree + branch, so it never
+touches your current checkout. **It stops before pushing or opening a PR**:
+you get a committed branch and a summary, and you push/PR it yourself.
+Because no human is present to approve actions mid-run, set
+`HARNESS_PERMISSION_MODE=allowlist` or `auto` — in `ask` mode every write
+gets denied and the pipeline will report "stuck" almost immediately.
+
 ### Session commands
 
 Inside the CLI, lines starting with `/` are commands (everything else is a task):
@@ -85,6 +115,8 @@ summarized) so they don't overflow the model's context window.
 ```bash
 python tests/smoke_test.py    # full agent loop against a fake model
 python tests/phase2_test.py   # context compaction, persistence, usage tracking
+python tests/mcp_test.py      # MCP tool wrapping, risk mapping, call dispatch
+python tests/pipeline_test.py # stage sequencing, stuck detection, repair loop
 ```
 
-Both run against fakes — no key, no network — and should print `... PASSED`.
+All four run against fakes — no key, no network — and should print `... PASSED`.

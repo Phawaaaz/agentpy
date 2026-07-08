@@ -35,14 +35,15 @@ If a change forces you to edit the loop, stop — the design has drifted. Re-rea
 ## Project layout
 
 ```
-interfaces/     thin entry points (CLI now; Slack / API later)
+interfaces/     thin entry points (CLI, pipeline CLI now; Slack / API later)
 core/           orchestrator (the loop) + permissions + context (compaction)
-tools/          registry + dispatcher + the tools (filesystem, shell, fetch_url)
+tools/          registry + dispatcher + the tools (filesystem, shell, fetch_url, MCP client)
 providers/      Provider interface + per-model adapters (Anthropic, OpenAI-compatible)
+pipeline/       optional outer loop: multi-stage autonomous runs, composes core/ (D15)
 store/          session persistence (save/resume conversations as JSON)
 observability/  token usage + cost estimate + JSONL event logging
 config.py       settings resolved once from env/.env, injected at the edge
-tests/          smoke_test.py + phase2_test.py — run the system with fakes, no key
+tests/          smoke_test.py, phase2_test.py, mcp_test.py, pipeline_test.py — fakes, no key
 ```
 
 ## Hard rules (enforced, not suggestions)
@@ -72,12 +73,15 @@ pip install -r requirements.txt
 # verify the system WITHOUT any API key (must stay green):
 python tests/smoke_test.py        # prints: SMOKE TEST PASSED
 python tests/phase2_test.py       # prints: PHASE 2 TESTS PASSED
+python tests/mcp_test.py          # prints: MCP TESTS PASSED
+python tests/pipeline_test.py     # prints: PIPELINE TESTS PASSED
 
 # run for real (after: cp .env.example .env; set HARNESS_MODEL + HARNESS_API_KEY):
-python main.py
+python main.py                    # interactive CLI
+python pipeline.py "<task>"       # autonomous multi-stage pipeline (see pipeline/)
 ```
 
-**Always run both test files after a change** and keep them passing.
+**Always run all four test files after a change** and keep them passing.
 New core logic must be testable with fakes — if it can only be tested against a
 live API, it's in the wrong layer.
 
@@ -89,6 +93,12 @@ live API, it's in the wrong layer.
   — no code. Otherwise subclass `Provider` and add one branch to the factory.
 - **Add an interface:** supply an `approver` and an `on_event` callback, wire with
   `build_provider(config)`. Put no agent logic in the interface.
+- **Connect an MCP server:** add it to `.harness/mcp.json` (copy
+  `mcp.json.example`), or `/mcp connect <name>` at runtime. No code needed —
+  its tools register dynamically (D14).
+- **Add a pipeline stage:** add a prompt builder to `pipeline/stages.py` and
+  call it from `pipeline/runner.py`'s stage sequence. The base loop
+  (`core/orchestrator.py`) is untouched either way.
 
 ## Environment / platform notes
 

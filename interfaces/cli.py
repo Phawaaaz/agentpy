@@ -16,6 +16,7 @@ from observability.usage import UsageTracker
 from providers.base import ToolCall
 from providers.factory import build_provider
 from store.session_store import SessionStore
+from tools.mcp_client import MCPManager, load_server_configs
 from tools.registry import Tool, registry
 
 # Importing these modules registers their tools onto the shared registry.
@@ -24,13 +25,16 @@ import tools.shell  # noqa: F401
 import tools.web  # noqa: F401
 
 HELP = """commands:
-  /new           start a fresh conversation
-  /save [id]     save the current session (default id = current)
-  /load <id>     load a saved session
-  /sessions      list saved sessions
-  /cost          show token usage and estimated cost
-  /help          show this help
-  quit           exit
+  /new                 start a fresh conversation
+  /save [id]           save the current session (default id = current)
+  /load <id>           load a saved session
+  /sessions            list saved sessions
+  /cost                show token usage and estimated cost
+  /mcp                 list connected MCP servers and their tools
+  /mcp connect <name>  connect a server from the MCP config file
+  /mcp disconnect <n>  disconnect a server and remove its tools
+  /help                show this help
+  quit                 exit
 anything else is sent to the agent as a task."""
 
 
@@ -116,7 +120,44 @@ class Session:
         self.agent = self._new_agent()
 
 
-def _handle_command(text: str, session: Session, store: SessionStore) -> bool:
+def _handle_mcp_command(args: list[str], mcp_manager: MCPManager, config: Config) -> None:
+    if not args:
+        connected = mcp_manager.list_connected()
+        if not connected:
+            print("(no MCP servers connected)")
+            return
+        for name, tool_names in connected.items():
+            print(f"  {name}: {', '.join(tool_names) or '(no tools)'}")
+        return
+
+    sub, rest = args[0], args[1:]
+    if sub == "connect":
+        if not rest:
+            print("usage: /mcp connect <name>")
+            return
+        configs = {c.name: c for c in load_server_configs(config.mcp_config_path)}
+        server = configs.get(rest[0])
+        if server is None:
+            print(f"no such server '{rest[0]}' in {config.mcp_config_path}")
+            return
+        try:
+            names = mcp_manager.connect(server)
+        except Exception as exc:
+            print(f"failed to connect '{rest[0]}': {exc}")
+            return
+        print(f"connected '{rest[0]}' -> {', '.join(names) or '(no tools)'}")
+    elif sub == "disconnect":
+        if not rest:
+            print("usage: /mcp disconnect <name>")
+            return
+        print(f"disconnected '{rest[0]}'" if mcp_manager.disconnect(rest[0]) else f"'{rest[0]}' was not connected")
+    else:
+        print("usage: /mcp | /mcp connect <name> | /mcp disconnect <name>")
+
+
+def _handle_command(
+    text: str, session: Session, store: SessionStore, mcp_manager: MCPManager
+) -> bool:
     """Handle a /command. Returns True if input was a command (handled)."""
     if not text.startswith("/"):
         return False
@@ -147,9 +188,24 @@ def _handle_command(text: str, session: Session, store: SessionStore) -> bool:
         print("\n".join(ids) if ids else "(no saved sessions)")
     elif cmd == "/cost":
         print(session.usage.summary())
+    elif cmd == "/mcp":
+        _handle_mcp_command(args, mcp_manager, session.config)
     else:
         print(f"unknown command: {cmd} (try /help)")
     return True
+
+
+def _connect_configured_mcp_servers(mcp_manager: MCPManager, config: Config) -> None:
+    for server in load_server_configs(config.mcp_config_path):
+        try:
+            names = mcp_manager.connect(server)
+            print(f"  mcp '{server.name}': {', '.join(names) or '(no tools)'}")
+        except Exception as exc:
+            # A misbehaving/unreachable MCP server shouldn't stop the CLI
+            # from starting; report it and move on (PRINCIPLES: fail safe
+            # for runtime concerns, not setup — the server is external,
+            # not our config).
+            print(f"  mcp '{server.name}': failed to connect ({exc})")
 
 
 def main() -> None:
@@ -158,39 +214,44 @@ def main() -> None:
     logger = EventLogger(config.logs_dir, datetime.now().strftime("%Y%m%d-%H%M%S"))
     session = Session(config, provider, _make_event_handler(logger))
     store = SessionStore(config.sessions_dir)
+    mcp_manager = MCPManager(registry)
 
     print("=" * 60)
     print("  Agentic Harness  —  Phase 2 (CLI)")
     print(f"  model: {config.model}")
     print(f"  permission mode: {config.permission_mode}")
     print(f"  tools: {', '.join(t.name for t in registry.all())}")
+    _connect_configured_mcp_servers(mcp_manager, config)
     print(f"  session: {session.id}   (/help for commands)")
     print("=" * 60)
 
-    while True:
-        try:
-            user_input = input("\nyou > ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print("\nbye")
-            return
+    try:
+        while True:
+            try:
+                user_input = input("\nyou > ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\nbye")
+                return
 
-        if not user_input:
-            continue
-        if user_input.lower() in ("quit", "exit", "q"):
-            print("bye")
-            return
-        if _handle_command(user_input, session, store):
-            continue
+            if not user_input:
+                continue
+            if user_input.lower() in ("quit", "exit", "q"):
+                print("bye")
+                return
+            if _handle_command(user_input, session, store, mcp_manager):
+                continue
 
-        try:
-            answer = session.agent.run(user_input)
-        except Exception as exc:
-            print(f"\n✗ error: {exc}")
-            continue
+            try:
+                answer = session.agent.run(user_input)
+            except Exception as exc:
+                print(f"\n✗ error: {exc}")
+                continue
 
-        print(f"\nagent > {answer}")
-        print(f"        [{session.usage.summary()}]")
-        store.save(session.id, session.conversation)  # auto-save after each turn
+            print(f"\nagent > {answer}")
+            print(f"        [{session.usage.summary()}]")
+            store.save(session.id, session.conversation)  # auto-save after each turn
+    finally:
+        mcp_manager.disconnect_all()
 
 
 if __name__ == "__main__":

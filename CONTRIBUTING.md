@@ -147,6 +147,39 @@ An interface is thin: capture input, report events, handle approvals, wire deps.
 
 ---
 
+## How to connect an MCP server
+
+No code needed — add it to `.harness/mcp.json` (copy `mcp.json.example`):
+
+```json
+{"mcpServers": {"my-server": {"command": "npx", "args": ["-y", "some-mcp-server"]}}}
+```
+
+It connects automatically on CLI startup; use `/mcp connect my-server` to
+connect one without restarting. Its tools appear as `mcp__my-server__<tool>`
+with risk inferred from the server's own tool annotations (see DESIGN.md D14).
+A remote server uses `"url"` (+ `"transport": "http"` or `"sse"`) instead of
+`"command"`/`"args"`.
+
+## How to add a PIPELINE STAGE
+
+The autonomous pipeline (`pipeline/`, run via `python pipeline.py "<task>"`)
+runs implement → self-review → verify → test → sync-docs as a fixed sequence
+of bounded `Orchestrator.run()` calls. To add a stage:
+
+1. Add a prompt builder to `pipeline/stages.py` (same shape as
+   `verify_prompt`/`sync_docs_prompt`): takes the task + current diff, returns
+   a prompt string ending with `stages.COMPLETION_INSTRUCTIONS`.
+2. Call it from `pipeline/runner.py`'s `_run_outer_stages` (or the implement
+   loop, if the new stage should iterate), via the existing `run_and_commit`
+   helper so it's committed and logged to `progress.log` the same way every
+   other stage is.
+
+`core/orchestrator.py` is never touched for this — the pipeline only composes
+it (DESIGN.md D15).
+
+---
+
 ## Coding standards (short version)
 
 - Type-hint public functions and dataclasses.
@@ -167,3 +200,8 @@ Full rationale and the PR checklist are in [PRINCIPLES.md](PRINCIPLES.md).
   live API, it's in the wrong layer.
 - When adding a tool, a quick unit test of the handler (happy path + error path)
   is enough; the loop already has coverage.
+- `tests/mcp_test.py` fakes the MCP session itself (duck-typed, no real
+  subprocess/network) — extend it the same way for new MCP-related logic.
+- `tests/pipeline_test.py` scripts a `FakeProvider` per stage call against a
+  real, local, disposable git repo (fast, no network) — extend it the same
+  way for new pipeline stages or safety rails.

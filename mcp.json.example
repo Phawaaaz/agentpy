@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allow"]
+    },
+    "hosted-example": {
+      "url": "https://example.com/mcp",
+      "transport": "http"
+    }
+  }
+}

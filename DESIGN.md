@@ -152,6 +152,61 @@ usage where the model call happens is the one place it's always available.
 model (unknown models report zero and say so). Accepted — it's guidance, not
 billing, and the table is trivial to update.
 
+### D14 — MCP tools are managed by a stateful `MCPManager`, not self-registered
+**Decision:** `tools/mcp_client.py`'s `MCPManager` owns live connections to
+external MCP servers (subprocess or network) and registers/deregisters their
+tools onto the shared `registry` as servers connect/disconnect, instead of
+the usual "tool module imports itself onto the registry" pattern (D8).
+**Why:** every other tool is a plain function known at import time. An MCP
+server's tools are dynamic (only known after connecting), and the connection
+itself needs a lifecycle (connect, list, call, disconnect) a bare function
+can't hold. Since the harness is otherwise synchronous and the `mcp` SDK is
+async, `MCPManager` also owns one background asyncio event loop (a thread)
+that every operation is dispatched onto and waited for synchronously — this
+keeps every tool handler a plain `(**kwargs) -> str` function, so nothing
+downstream (permissions, orchestrator, registry) needs to know a tool might
+be remote.
+**Risk mapping:** MCP servers are third-party and untrusted by default. Risk
+is derived from the tool's own MCP annotations when present
+(`readOnlyHint` → `safe`, `destructiveHint` → `dangerous`), else assumed
+`write` — never silently trusted as `safe`. This still flows through the
+existing `permissions.check` unchanged.
+**Trade-off:** a second way for tools to enter the registry (import-time
+self-registration vs. runtime `MCPManager.connect`). Accepted because the
+two cases are genuinely different (static vs. live), and both still produce
+plain `Tool` objects the rest of the system treats identically.
+
+### D15 — The autonomous pipeline is a new package that composes the loop, not a change to it
+**Decision:** `pipeline/` implements a higher-level, multi-stage loop
+(implement → self-review → verify → test → sync-docs) by calling
+`core.orchestrator.Orchestrator.run()` repeatedly — once per stage/iteration,
+each a fresh, bounded, ordinary run of the *unmodified* orchestrator.
+**Why:** per D1, the base loop stays fixed and small. The pipeline's
+additional structure (stuck detection, iteration caps, a wall-clock timeout,
+repair caps, git-worktree isolation) is real complexity that a single
+company-wide agent doesn't always want — it belongs in an optional layer
+above the loop, not folded into it. Giving each stage a *fresh* `Conversation`
+seeded from an append-only `progress.log` and the current `git diff --stat`
+(rather than one long conversation carried across stages) means no stage's
+context can grow unbounded, and `core/context.py`'s compaction stays
+irrelevant to the pipeline entirely.
+**Stuck/timeout mechanism:** after each implement iteration, `git status
+--porcelain` in the isolated worktree is the progress signal — no change for
+`stuck_after` (default 3) consecutive iterations stops the loop, same idea as
+`max_steps` but for *iterations that produce nothing* rather than iterations
+that exceed a count. A wall-clock `slice_timeout_s` budget is checked
+alongside `max_iterations`, since a single slow tool call can blow a
+step-count budget without blowing a time budget or vice versa.
+**Scope (v1):** stops before pushing or opening a PR — it hands back a
+committed branch in an isolated worktree for a human to review and push.
+Auto-push/PR, cross-model review, and parallel slices are deliberately
+deferred (see ARCHITECTURE.md roadmap) rather than built speculatively.
+**Trade-off:** running a slice unattended means no human can answer an "ask"
+permission decision, so the pipeline's approver always denies rather than
+always allows (fail safe, not fail open) — this makes `permission_mode:
+allowlist` or `auto` a practical requirement for the pipeline to get
+anywhere, which is called out at pipeline startup.
+
 ---
 
 ## Known limitations & future work
@@ -167,6 +222,14 @@ billing, and the table is trivial to update.
 - **Coarse risk model:** see D5.
 - **No web *search* yet:** only `fetch_url` (needs a known URL). Search needs an
   API key or scraping — deferred to Phase 3.
+- **Pipeline runs one slice at a time:** no parallel worktrees yet. Real
+  parallelism needs separate OS processes (not just threads, since `_cwd`
+  chdir is process-global) — a bigger step, left for a follow-up.
+- **Pipeline stops before push/PR:** by design for v1 (see D15). Adding
+  push + `gh pr create` (or a REST-based `tools/github.py`) is additive, not
+  a redesign, whenever that trust boundary is worth crossing.
+- **No cross-model review stage:** would need a second configured `Provider`;
+  deferred until there's a real second-provider use case (PRINCIPLES rule 8).
 
 Every item above has a home in the existing structure — none requires reshaping
 the loop.

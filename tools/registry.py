@@ -26,6 +26,10 @@ class Registry:
         self._tools[tool.name] = tool
         return tool
 
+    def unregister(self, name: str) -> bool:
+        """Remove a tool by name. Returns False if it wasn't registered."""
+        return self._tools.pop(name, None) is not None
+
     def get(self, name: str) -> Tool | None:
         return self._tools.get(name)
 
