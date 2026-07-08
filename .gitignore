@@ -1,0 +1,19 @@
+# Secrets — never commit real keys
+.env
+
+# Local session state, logs, and traces
+.harness/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

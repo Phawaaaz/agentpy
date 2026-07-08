@@ -1,0 +1,8 @@
+# The harness stays model-independent via native SDKs behind one Provider
+# interface. The OpenAI provider also accepts a base_url, so it drives ANY
+# OpenAI-compatible endpoint (Ollama, LM Studio, OpenRouter, Groq, Together, vLLM).
+anthropic>=0.40.0
+openai>=1.40.0
+
+# Loads API keys / settings from a .env file so they stay out of the code.
+python-dotenv>=1.0.0
