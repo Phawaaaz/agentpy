@@ -51,12 +51,14 @@ an interface. Wiring happens only in `interfaces/` via `providers/factory.py`.
 | `tools/filesystem.py` | read/write/edit/list | Filesystem tools (self-register) |
 | `tools/shell.py` | run_command | Shell tool (self-register) |
 | `tools/mcp_client.py` | `MCPManager`, `MCPServerConfig` | Connect to MCP servers; register/deregister their tools (D14) |
+| `tools/memory.py` | `memory`, `set_memory_root` | The model's own view/create/str_replace/insert/delete/rename tool (D16) |
 | `core/permissions.py` | `check` | allow / ask / deny decision |
 | `core/context.py` | `Conversation`, `make_provider_summarizer` | Hold history; compact it when over budget |
 | `core/orchestrator.py` | `Orchestrator` | The agent loop + tool gating |
 | `store/session_store.py` | `SessionStore` | Save/load a conversation as JSON |
 | `observability/usage.py` | `UsageTracker`, `cost_for` | Accumulate tokens; estimate spend |
 | `observability/log.py` | `EventLogger` | Append a JSONL trace of events |
+| `observability/memory_tracker.py` | `MemoryTracker` | Automatic "what am I working on" summary, independent of `tools/memory.py` (D16) |
 | `interfaces/cli.py` | `main`, `Session` | Terminal I/O, approvals, session commands, MCP wiring |
 | `pipeline/runner.py` | `PipelineRunner` | Outer multi-stage loop: implement → self-review → verify → test → sync-docs (D15) |
 | `pipeline/worktree.py` | worktree/commit helpers | Isolated git worktree per slice; the stuck-detection signal |
@@ -151,6 +153,27 @@ they're indistinguishable from any other `Tool` to the orchestrator and
 permission layer. `disconnect(name)` deregisters them; `list_connected()`
 reports what's live. The CLI wires this at startup from `.harness/mcp.json`
 (see `mcp.json.example`) and via `/mcp`, `/mcp connect`, `/mcp disconnect`.
+
+## Memory (two independent pieces)
+
+"Memory" is deliberately not one component:
+
+- `tools/memory.py` — a plain tool (`view`/`create`/`str_replace`/`insert`/
+  `delete`/`rename` over a confined directory) the model calls when it
+  decides something is worth remembering across turns or sessions. Same
+  shape as every other tool — nothing provider-specific (D16).
+- `observability/memory_tracker.py`'s `MemoryTracker` — listens on the same
+  `on_event` stream as `EventLogger` and automatically maintains
+  `<memory_dir>/activity.md`: the current task, files touched, tool usage
+  counts. Works whether or not the model ever calls the memory tool.
+
+Neither imports the other. `interfaces/cli.py` is the only place that knows
+both exist: it points `tools/memory.py` at `config.memory_dir` via
+`set_memory_root()`, and fans `on_event` out to both `EventLogger` and
+`MemoryTracker` via `_make_event_handler(*listeners)` — any object with a
+`log(kind, *details)` method can be added or removed there as a one-line
+change, with no signature change anywhere else. `/memory` prints the current
+`MemoryTracker` summary.
 
 ## The pipeline (outer loop, optional)
 

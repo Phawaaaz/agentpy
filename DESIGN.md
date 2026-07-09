@@ -207,6 +207,46 @@ always allows (fail safe, not fail open) — this makes `permission_mode:
 allowlist` or `auto` a practical requirement for the pipeline to get
 anywhere, which is called out at pipeline startup.
 
+### D16 — Memory is two independent pieces, not one feature
+**Decision:** "memory" is deliberately split into two components that don't
+know about each other:
+- `tools/memory.py` — a plain neutral `Tool` (view/create/str_replace/
+  insert/delete/rename over a confined directory) the *model* calls
+  deliberately, exactly like `tools/filesystem.py`.
+- `observability/memory_tracker.py`'s `MemoryTracker` — an automatic,
+  harness-side listener that derives a standing "current task / files
+  touched / tool usage" summary from the same `on_event` stream
+  `observability/log.py`'s `EventLogger` already listens to, with **no
+  import of `tools/memory.py`** and no dependency in the other direction.
+**Why not Anthropic's native `memory_20250818` tool type:** that type has a
+fixed schema Claude expects natively — using it would mean the Anthropic
+provider special-cases one tool while every other provider (OpenAI-compatible
+endpoints) gets a plain function tool, breaking D3/D4's "one neutral schema,
+providers translate, nothing upstream knows which model is running." A
+hand-defined tool with the same view/create/str_replace/insert/delete/rename
+convention gets the proven interface without the lock-in.
+**Why two pieces, not one "Memory" class:** they solve different problems —
+the tool is for content the *model* decides is worth keeping; the tracker is
+bookkeeping the *harness* keeps regardless of whether the model ever calls
+the tool. Fusing them would mean neither could be removed without touching
+the other. As built: delete `tools/memory.py` and `MemoryTracker` still
+works (just without the model's own notes alongside it); delete
+`MemoryTracker` and the memory tool still works (the model can still take
+notes, there's just no automatic activity summary). Both default to writing
+into the same `config.memory_dir` purely by convention — `interfaces/cli.py`
+sets `tools.memory`'s root from `config.memory_dir` explicitly at startup
+(`set_memory_root`), rather than either module reaching for `Config` itself.
+**Shared listener contract:** `EventLogger.log` was changed from
+`(kind, **fields)` to `(kind, *details)` — the same shape as `MemoryTracker.log`
+and as the orchestrator's own `on_event(kind, *details)` callback — so
+`interfaces/cli.py`'s event fan-out (`_make_event_handler(*listeners)`) can
+treat any number of listeners interchangeably. Adding or removing a listener
+is a one-line change in `main()`, never a signature change.
+**Trade-off:** two files instead of one; a human has to know both exist to
+get the full picture. Accepted — independent removability is worth more than
+the small discovery cost, and both are cheap to find from `tools/` and
+`observability/`'s existing per-concern layout.
+
 ---
 
 ## Known limitations & future work

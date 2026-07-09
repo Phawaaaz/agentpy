@@ -45,6 +45,8 @@ class Config:
     logs_dir: str = ".harness/logs"
     # MCP servers to connect to at startup (Claude-Desktop-style config file).
     mcp_config_path: str = ".harness/mcp.json"
+    # Where the memory tool and the automatic activity tracker write notes.
+    memory_dir: str = ".harness/memory"
 
     @classmethod
     def load(cls) -> "Config":
@@ -65,4 +67,5 @@ class Config:
             sessions_dir=os.getenv("HARNESS_SESSIONS_DIR", cls.sessions_dir),
             logs_dir=os.getenv("HARNESS_LOGS_DIR", cls.logs_dir),
             mcp_config_path=os.getenv("HARNESS_MCP_CONFIG", cls.mcp_config_path),
+            memory_dir=os.getenv("HARNESS_MEMORY_DIR", cls.memory_dir),
         )

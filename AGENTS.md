@@ -37,13 +37,13 @@ If a change forces you to edit the loop, stop — the design has drifted. Re-rea
 ```
 interfaces/     thin entry points (CLI, pipeline CLI now; Slack / API later)
 core/           orchestrator (the loop) + permissions + context (compaction)
-tools/          registry + dispatcher + the tools (filesystem, shell, fetch_url, MCP client)
+tools/          registry + dispatcher + the tools (filesystem, shell, fetch_url, MCP client, memory)
 providers/      Provider interface + per-model adapters (Anthropic, OpenAI-compatible)
 pipeline/       optional outer loop: multi-stage autonomous runs, composes core/ (D15)
 store/          session persistence (save/resume conversations as JSON)
-observability/  token usage + cost estimate + JSONL event logging
+observability/  token usage + cost estimate + JSONL event logging + activity tracking (D16)
 config.py       settings resolved once from env/.env, injected at the edge
-tests/          smoke_test.py, phase2_test.py, mcp_test.py, pipeline_test.py — fakes, no key
+tests/          smoke/phase2/mcp/pipeline/memory_test.py — all fakes, no key
 ```
 
 ## Hard rules (enforced, not suggestions)
@@ -75,13 +75,14 @@ python tests/smoke_test.py        # prints: SMOKE TEST PASSED
 python tests/phase2_test.py       # prints: PHASE 2 TESTS PASSED
 python tests/mcp_test.py          # prints: MCP TESTS PASSED
 python tests/pipeline_test.py     # prints: PIPELINE TESTS PASSED
+python tests/memory_test.py       # prints: MEMORY TESTS PASSED
 
 # run for real (after: cp .env.example .env; set HARNESS_MODEL + HARNESS_API_KEY):
 python main.py                    # interactive CLI
 python pipeline.py "<task>"       # autonomous multi-stage pipeline (see pipeline/)
 ```
 
-**Always run all four test files after a change** and keep them passing.
+**Always run all five test files after a change** and keep them passing.
 New core logic must be testable with fakes — if it can only be tested against a
 live API, it's in the wrong layer.
 

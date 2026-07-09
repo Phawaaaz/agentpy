@@ -12,6 +12,7 @@ from config import Config
 from core.context import Conversation, make_provider_summarizer
 from core.orchestrator import Orchestrator
 from observability.log import EventLogger
+from observability.memory_tracker import MemoryTracker
 from observability.usage import UsageTracker
 from providers.base import ToolCall
 from providers.factory import build_provider
@@ -21,6 +22,7 @@ from tools.registry import Tool, registry
 
 # Importing these modules registers their tools onto the shared registry.
 import tools.filesystem  # noqa: F401
+import tools.memory  # noqa: F401
 import tools.shell  # noqa: F401
 import tools.web  # noqa: F401
 
@@ -30,6 +32,7 @@ HELP = """commands:
   /load <id>           load a saved session
   /sessions            list saved sessions
   /cost                show token usage and estimated cost
+  /memory              show what the harness has been working on
   /mcp                 list connected MCP servers and their tools
   /mcp connect <name>  connect a server from the MCP config file
   /mcp disconnect <n>  disconnect a server and remove its tools
@@ -58,9 +61,16 @@ def _make_approver():
     return approve
 
 
-def _make_event_handler(logger: EventLogger):
+def _make_event_handler(*listeners):
+    """Fan `on_event` out to any number of independent listeners plus the
+    CLI's own printing. Each listener is a plain object with a
+    `log(kind, *details)` method (EventLogger, MemoryTracker, ...) -- adding
+    or removing one is a one-line change here, not a signature change, and
+    none of them depend on each other or on this function existing."""
+
     def on_event(kind: str, *details) -> None:
-        logger.log(kind, details=list(details))  # trace everything to file
+        for listener in listeners:
+            listener.log(kind, *details)
         if kind == "thinking":
             print(f"\n\U0001f9e0 {details[0]}")
         elif kind == "tool_call":
@@ -156,7 +166,11 @@ def _handle_mcp_command(args: list[str], mcp_manager: MCPManager, config: Config
 
 
 def _handle_command(
-    text: str, session: Session, store: SessionStore, mcp_manager: MCPManager
+    text: str,
+    session: Session,
+    store: SessionStore,
+    mcp_manager: MCPManager,
+    memory_tracker: MemoryTracker,
 ) -> bool:
     """Handle a /command. Returns True if input was a command (handled)."""
     if not text.startswith("/"):
@@ -188,6 +202,8 @@ def _handle_command(
         print("\n".join(ids) if ids else "(no saved sessions)")
     elif cmd == "/cost":
         print(session.usage.summary())
+    elif cmd == "/memory":
+        print(memory_tracker.summary())
     elif cmd == "/mcp":
         _handle_mcp_command(args, mcp_manager, session.config)
     else:
@@ -211,8 +227,15 @@ def _connect_configured_mcp_servers(mcp_manager: MCPManager, config: Config) -> 
 def main() -> None:
     config = Config.load()
     provider = build_provider(config)
-    logger = EventLogger(config.logs_dir, datetime.now().strftime("%Y%m%d-%H%M%S"))
-    session = Session(config, provider, _make_event_handler(logger))
+    run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
+
+    # Each listener is independent: remove the import + these two lines and
+    # nothing else in this file (or in either listener) needs to change.
+    logger = EventLogger(config.logs_dir, run_id)
+    memory_tracker = MemoryTracker(config.memory_dir, run_id)
+    tools.memory.set_memory_root(config.memory_dir)
+
+    session = Session(config, provider, _make_event_handler(logger, memory_tracker))
     store = SessionStore(config.sessions_dir)
     mcp_manager = MCPManager(registry)
 
@@ -238,9 +261,10 @@ def main() -> None:
             if user_input.lower() in ("quit", "exit", "q"):
                 print("bye")
                 return
-            if _handle_command(user_input, session, store, mcp_manager):
+            if _handle_command(user_input, session, store, mcp_manager, memory_tracker):
                 continue
 
+            memory_tracker.set_task(user_input)
             try:
                 answer = session.agent.run(user_input)
             except Exception as exc:
