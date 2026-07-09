@@ -247,6 +247,52 @@ get the full picture. Accepted — independent removability is worth more than
 the small discovery cost, and both are cheap to find from `tools/` and
 `observability/`'s existing per-concern layout.
 
+### D17 — Multi-agent is delegation-as-a-tool, not a second control flow
+**Decision:** `multiagent/coordinator.py`'s `build_delegate_tool` produces one
+tool, `delegate(role, task)`, that runs a fresh `Orchestrator` against a
+role-specific system prompt and returns its final answer as the tool result.
+Registered onto the shared `registry`, it's indistinguishable from any other
+tool to the coordinator's own loop — delegating to a sub-agent *is* a tool
+call, not a new kind of control flow.
+**Why this reverses D1's "not a multi-agent framework":** it doesn't, quite —
+D1's point was that the *base loop* stays one-agent-one-loop, and every
+extension composes it from outside rather than complicating it. Delegation
+follows that rule exactly: `core/orchestrator.py` is untouched, and "an agent
+that can spawn other agents" falls out of "a tool that happens to run another
+`Orchestrator`," the same pattern `pipeline/runner.py` already established
+for stages. What's genuinely new is the *policy* decision to allow it at all
+— recorded here rather than silently reversing D1.
+**Roles are external config**, loaded from `.harness/roles.json` (`load_roles`
+in `multiagent/roles.py`), same pattern as `tools/mcp_client.py`'s server
+list — adding a sub-agent role is a data change, not a Python change. No
+roles configured (the default) means no `delegate` tool is registered at
+all — multi-agent is opt-in, same as MCP.
+**Shared memory is not new plumbing.** A sub-agent's `Config` is the
+coordinator's own config with only `system_prompt` swapped (`dataclasses.
+replace`) — `memory_dir`, `permission_mode`, and `model` all carry over
+unchanged, and `tools/memory.py`'s root is process-global (set once at
+startup). Two agents sharing memory is simply two `Orchestrator`s pointed at
+the same directory; nothing had to be built for it.
+**One level of delegation, structurally, not by convention.** A sub-agent
+gets `FilteredRegistry(registry, hidden={"delegate"})` — a *live* view of the
+coordinator's registry (so MCP tools connected mid-session are still visible
+to sub-agents) with `delegate` itself hidden. A sub-agent literally cannot
+see the tool that would let it delegate further; there is no depth counter
+to get wrong, because recursion isn't reachable in the first place. This
+mirrors the same constraint Anthropic's own Managed Agents multiagent
+sessions apply ("one level of delegation only, depth > 1 is ignored").
+**`approver` is a required parameter on `build_delegate_tool`, not defaulted.**
+`Orchestrator`'s own default approver is "allow everything" — silently
+inheriting that default for a tool that spawns a full sub-agent (itself able
+to call `write`/`dangerous` tools) would be the wrong failure mode. Callers
+must pass one explicitly, same approver the coordinator itself uses.
+**Trade-off:** the coordinator decides delegation dynamically (it's just
+another tool the model can choose to call), rather than a fixed roster/stage
+sequence — flexible, but means there's no built-in guarantee a sub-agent
+ever gets called for a given task. Acceptable: that's true of every other
+tool too, and prompting (the role descriptions in the tool's own
+description) is the intended lever, same as any other tool-use trigger rate.
+
 ---
 
 ## Known limitations & future work
@@ -270,6 +316,11 @@ the small discovery cost, and both are cheap to find from `tools/` and
   a redesign, whenever that trust boundary is worth crossing.
 - **No cross-model review stage:** would need a second configured `Provider`;
   deferred until there's a real second-provider use case (PRINCIPLES rule 8).
+- **Sub-agent activity isn't visually distinguished in the CLI:** a delegated
+  sub-agent's `tool_call`/`thinking` events flow through the same `on_event`
+  as the coordinator's own, unlabeled — you can tell something is happening,
+  not which agent is doing it. Adding a "who" tag to the event shape would
+  fix this without touching `core/orchestrator.py` (D17); not done yet.
 
 Every item above has a home in the existing structure — none requires reshaping
 the loop.

@@ -18,6 +18,7 @@ is added as new tools, providers, and interfaces at the edges.**
 │ interfaces/     CLI + pipeline CLI now; Slack / HTTP API later  │  ← talks to humans/systems
 ├──────────────────────────────────────────────────────────────┤
 │ pipeline/       multi-stage autonomous loop (composes core/)   │  ← optional outer layer
+│ multiagent/     delegate-to-sub-agent tool (composes core/)    │  ← optional outer layer
 ├──────────────────────────────────────────────────────────────┤
 │ core/           orchestrator (the loop) + permissions          │  ← policy / control flow
 ├──────────────────────────────────────────────────────────────┤
@@ -27,12 +28,13 @@ is added as new tools, providers, and interfaces at the edges.**
 └──────────────────────────────────────────────────────────────┘
    config.py       settings resolved once, injected at the edge
    store/          session persistence (save/resume conversations)   ┐ cross-cutting:
-   observability/  usage/cost tracking + event logging              ┘ touch every layer
+   observability/  usage/cost tracking + event logging + activity   ┘ touch every layer
 ```
 
-`pipeline/` sits *above* `core/`, not inside it: it calls `Orchestrator.run()`
-repeatedly (once per stage/iteration) instead of changing what the loop does.
-See D15 in [DESIGN.md](DESIGN.md).
+`pipeline/` and `multiagent/` both sit *above* `core/`, not inside it: each
+calls `Orchestrator.run()` — repeatedly for a stage sequence, or once per
+delegated sub-task — instead of changing what the loop does. See D15 and
+D17 in [DESIGN.md](DESIGN.md).
 
 Dependencies point **downward and inward, toward abstractions**. `core/` depends
 on the `Provider` interface and the `Registry`, never on a concrete provider or
@@ -63,8 +65,10 @@ an interface. Wiring happens only in `interfaces/` via `providers/factory.py`.
 | `pipeline/runner.py` | `PipelineRunner` | Outer multi-stage loop: implement → self-review → verify → test → sync-docs (D15) |
 | `pipeline/worktree.py` | worktree/commit helpers | Isolated git worktree per slice; the stuck-detection signal |
 | `pipeline/state.py` | `SliceState`, `ProgressLog` | Persist slice status + an append-only progress trail |
-| `pipeline/stages.py` | stage prompt builders | One prompt template per stage |
+| `pipeline/stages.py` | stage prompt builders | One prompt template per stage; reused directly by the CLI's skill commands (D16 area) |
 | `interfaces/pipeline_cli.py` | `main` | `python pipeline.py "<task>"` entry point |
+| `multiagent/coordinator.py` | `build_delegate_tool`, `FilteredRegistry` | The `delegate` tool + the live registry view that hides it from sub-agents (D17) |
+| `multiagent/roles.py` | `AgentRole`, `load_roles` | Sub-agent roles loaded from `.harness/roles.json` |
 
 ## The request lifecycle
 
@@ -175,6 +179,33 @@ both exist: it points `tools/memory.py` at `config.memory_dir` via
 change, with no signature change anywhere else. `/memory` prints the current
 `MemoryTracker` summary.
 
+## Skills (named, on-demand instructions)
+
+The interactive CLI's `/review`, `/verify`, `/test`, `/docs` commands are
+`pipeline/stages.py`'s prompt builders invoked individually, mid-conversation,
+instead of only as a fixed pipeline sequence — `interfaces/cli.py`'s
+`_handle_skill_command` builds the prompt (task text: an explicit argument,
+else the current `MemoryTracker.task`; diff: `pipeline/worktree.diff_stat(".")`,
+or a graceful "(not a git repository)" fallback) and feeds it into the
+*existing* `session.agent.run(...)` — same conversation, same context, not a
+fresh isolated run like the pipeline uses. `pipeline/stages.py` itself stays
+a dependency-free leaf module used by both callers; neither `pipeline/runner.py`
+nor `interfaces/cli.py` knows about the other's use of it.
+
+## Multi-agent (delegation as a tool)
+
+If `.harness/roles.json` defines any roles, `interfaces/cli.py` registers one
+extra tool, `delegate(role, task)` (`multiagent/coordinator.py`), onto the
+shared `registry`. Calling it runs a fresh `Orchestrator` with a role-specific
+system prompt and returns its final answer as the tool result — from the
+calling agent's perspective, delegating to a sub-agent looks exactly like
+calling any other tool. Sub-agents share the coordinator's `Config` (model,
+permission_mode, `memory_dir`) and approver, and see every tool the
+coordinator currently has *except* `delegate` itself (`FilteredRegistry`) —
+one level of delegation only, structurally, not by a depth counter. See D17
+in [DESIGN.md](DESIGN.md) for the full rationale, including why this doesn't
+reverse D1.
+
 ## The pipeline (outer loop, optional)
 
 `pipeline/` is a second entry point (`python pipeline.py "<task>"`,
@@ -238,8 +269,11 @@ Step-by-step recipes are in [CONTRIBUTING.md](CONTRIBUTING.md).
 - **Phase 2 (done):** context management (history compaction), session
   persistence, observability + cost tracking, `fetch_url` web tool.
 - **Phase 3 (in progress):** MCP client (`tools/mcp_client.py`, dynamic
-  tools), autonomous multi-stage pipeline (`pipeline/`, stops before push/PR).
-  Still open: HTTP API, per-user config, Slack interface, web *search*,
-  pipeline push/PR automation, cross-model review, parallel slices.
+  tools), autonomous multi-stage pipeline (`pipeline/`, stops before push/PR),
+  agent memory (`tools/memory.py` + `observability/memory_tracker.py`,
+  D16), skill commands (`/review`/`/verify`/`/test`/`/docs`), multi-agent
+  delegation (`multiagent/`, D17). Still open: HTTP API, per-user config,
+  Slack interface, web *search*, pipeline push/PR automation, cross-model
+  review, parallel slices, labeling sub-agent activity in the CLI output.
 
 These phases slot into the existing folders without reshaping the loop.

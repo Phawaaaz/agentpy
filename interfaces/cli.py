@@ -11,9 +11,12 @@ from datetime import datetime
 from config import Config
 from core.context import Conversation, make_provider_summarizer
 from core.orchestrator import Orchestrator
+from multiagent.coordinator import build_delegate_tool
+from multiagent.roles import load_roles
 from observability.log import EventLogger
 from observability.memory_tracker import MemoryTracker
 from observability.usage import UsageTracker
+from pipeline import stages, worktree
 from providers.base import ToolCall
 from providers.factory import build_provider
 from store.session_store import SessionStore
@@ -36,9 +39,24 @@ HELP = """commands:
   /mcp                 list connected MCP servers and their tools
   /mcp connect <name>  connect a server from the MCP config file
   /mcp disconnect <n>  disconnect a server and remove its tools
+  /review [task]       run the self-review skill (default task: current memory task)
+  /verify [task]       run the verify skill
+  /test [task]         run the test skill
+  /docs [task]         run the sync-docs skill
+  /roles               list configured sub-agent roles (delegate target)
   /help                show this help
   quit                 exit
 anything else is sent to the agent as a task."""
+
+# Named, on-demand instructions reusing pipeline/stages.py's prompt builders
+# -- the same "skill" idea Ralph implements via Claude Code Skills, adapted
+# to agentpy's own tool-calling loop instead of a second harness underneath.
+_SKILLS = {
+    "review": stages.self_review_prompt,
+    "verify": stages.verify_prompt,
+    "test": stages.test_prompt,
+    "docs": stages.sync_docs_prompt,
+}
 
 
 def _format_args(arguments: dict) -> str:
@@ -165,12 +183,45 @@ def _handle_mcp_command(args: list[str], mcp_manager: MCPManager, config: Config
         print("usage: /mcp | /mcp connect <name> | /mcp disconnect <name>")
 
 
+def _handle_roles_command(roles: dict) -> None:
+    if not roles:
+        print("(no sub-agent roles configured -- add some to .harness/roles.json to enable /delegate)")
+        return
+    for name, role in sorted(roles.items()):
+        print(f"  {name}: {role.description}")
+
+
+def _handle_skill_command(
+    stage: str, args: list[str], session: Session, store: SessionStore, memory_tracker: MemoryTracker
+) -> None:
+    task = " ".join(args) if args else memory_tracker.task
+    if not task:
+        print(f"usage: /{stage} [task]  (no current task in memory -- give one, or run a task first)")
+        return
+    try:
+        diff = worktree.diff_stat(".")
+    except worktree.WorktreeError:
+        diff = "(not a git repository)"
+
+    prompt = _SKILLS[stage](task, diff)
+    print(f"\n[running /{stage}]")
+    try:
+        answer = session.agent.run(prompt)
+    except Exception as exc:
+        print(f"\n✗ error: {exc}")
+        return
+    print(f"\nagent > {answer}")
+    print(f"        [{session.usage.summary()}]")
+    store.save(session.id, session.conversation)
+
+
 def _handle_command(
     text: str,
     session: Session,
     store: SessionStore,
     mcp_manager: MCPManager,
     memory_tracker: MemoryTracker,
+    roles: dict,
 ) -> bool:
     """Handle a /command. Returns True if input was a command (handled)."""
     if not text.startswith("/"):
@@ -206,6 +257,10 @@ def _handle_command(
         print(memory_tracker.summary())
     elif cmd == "/mcp":
         _handle_mcp_command(args, mcp_manager, session.config)
+    elif cmd == "/roles":
+        _handle_roles_command(roles)
+    elif cmd.lstrip("/") in _SKILLS:
+        _handle_skill_command(cmd.lstrip("/"), args, session, store, memory_tracker)
     else:
         print(f"unknown command: {cmd} (try /help)")
     return True
@@ -234,8 +289,20 @@ def main() -> None:
     logger = EventLogger(config.logs_dir, run_id)
     memory_tracker = MemoryTracker(config.memory_dir, run_id)
     tools.memory.set_memory_root(config.memory_dir)
+    on_event = _make_event_handler(logger, memory_tracker)
 
-    session = Session(config, provider, _make_event_handler(logger, memory_tracker))
+    # Multi-agent is opt-in: no roles configured means no `delegate` tool.
+    # Removing this block (and .harness/roles.json) turns it back off with
+    # no other change anywhere in the harness.
+    roles = load_roles(config.roles_config_path)
+    if roles:
+        registry.register(
+            build_delegate_tool(
+                provider, registry, config, roles, approver=_make_approver(), on_event=on_event
+            )
+        )
+
+    session = Session(config, provider, on_event)
     store = SessionStore(config.sessions_dir)
     mcp_manager = MCPManager(registry)
 
@@ -244,6 +311,8 @@ def main() -> None:
     print(f"  model: {config.model}")
     print(f"  permission mode: {config.permission_mode}")
     print(f"  tools: {', '.join(t.name for t in registry.all())}")
+    if roles:
+        print(f"  roles: {', '.join(sorted(roles))}")
     _connect_configured_mcp_servers(mcp_manager, config)
     print(f"  session: {session.id}   (/help for commands)")
     print("=" * 60)
@@ -261,7 +330,7 @@ def main() -> None:
             if user_input.lower() in ("quit", "exit", "q"):
                 print("bye")
                 return
-            if _handle_command(user_input, session, store, mcp_manager, memory_tracker):
+            if _handle_command(user_input, session, store, mcp_manager, memory_tracker, roles):
                 continue
 
             memory_tracker.set_task(user_input)

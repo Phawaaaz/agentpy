@@ -22,6 +22,12 @@ Work in small, verifiable steps: inspect before you change, and check your work
 after you change something (for example, run tests or re-read a file). When the
 task is finished, stop calling tools and give a short, clear summary of what you
 did. If you cannot complete the task, say so plainly and explain why.
+
+If a `memory` tool is available, check it near the start of a task for context
+from earlier sessions (prior decisions, known gotchas, work already in
+progress) before you start exploring from scratch, and write down anything
+you learn that would help a future session -- not routine narration, only
+what would actually save re-discovery.
 """
 
 
@@ -47,6 +53,8 @@ class Config:
     mcp_config_path: str = ".harness/mcp.json"
     # Where the memory tool and the automatic activity tracker write notes.
     memory_dir: str = ".harness/memory"
+    # Sub-agent roles the coordinator can delegate to (empty file = no delegate tool).
+    roles_config_path: str = ".harness/roles.json"
 
     @classmethod
     def load(cls) -> "Config":
@@ -68,4 +76,5 @@ class Config:
             logs_dir=os.getenv("HARNESS_LOGS_DIR", cls.logs_dir),
             mcp_config_path=os.getenv("HARNESS_MCP_CONFIG", cls.mcp_config_path),
             memory_dir=os.getenv("HARNESS_MEMORY_DIR", cls.memory_dir),
+            roles_config_path=os.getenv("HARNESS_ROLES_CONFIG", cls.roles_config_path),
         )
