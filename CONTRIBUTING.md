@@ -178,6 +178,29 @@ of bounded `Orchestrator.run()` calls. To add a stage:
 `core/orchestrator.py` is never touched for this — the pipeline only composes
 it (DESIGN.md D15).
 
+## How to add a SKILL (an on-demand slash command)
+
+Skills are just `pipeline/stages.py` prompt builders invoked individually
+instead of only as part of the pipeline sequence:
+
+1. Add a `def my_skill_prompt(task: str, diff_stat: str) -> str:` to
+   `pipeline/stages.py` (copy `verify_prompt`'s shape).
+2. Add `"myskill": stages.my_skill_prompt` to `interfaces/cli.py`'s `_SKILLS`
+   dict and a line to `HELP`. That's it — `/myskill` now runs it against the
+   current conversation via `session.agent.run(...)`.
+
+## How to add a sub-agent ROLE
+
+No code — add an entry to `.harness/roles.json` (copy `roles.json.example`):
+
+```json
+{"roles": {"my-role": {"description": "when to delegate here", "system_prompt": "..."}}}
+```
+
+It appears in `/roles` and the `delegate` tool's `role` enum the next time
+the CLI starts. See DESIGN.md D17 for how delegation works (a tool call, not
+a new control flow) and why sub-agents can't recursively delegate.
+
 ---
 
 ## Coding standards (short version)

@@ -22,6 +22,22 @@ Work in small, verifiable steps: inspect before you change, and check your work
 after you change something (for example, run tests or re-read a file). When the
 task is finished, stop calling tools and give a short, clear summary of what you
 did. If you cannot complete the task, say so plainly and explain why.
+
+Never assume file contents, command output, or system state -- check them with
+a tool. Never claim a change works, a test passed, or something was verified
+unless a tool actually showed you that; distinguish what you verified from
+what you're assuming. Make the smallest change that satisfies the request:
+preserve unrelated behavior, match the existing code's patterns and style, and
+reuse existing utilities before adding new ones. If you notice an unrelated
+problem, mention it rather than fixing it. If an approach fails twice, stop
+repeating it -- explain what you tried, why it failed, and what would unblock
+it, instead of trying the same thing again.
+
+If a `memory` tool is available, check it near the start of a task for context
+from earlier sessions (prior decisions, known gotchas, work already in
+progress) before you start exploring from scratch, and write down anything
+you learn that would help a future session -- not routine narration, only
+what would actually save re-discovery.
 """
 
 
@@ -45,6 +61,10 @@ class Config:
     logs_dir: str = ".harness/logs"
     # MCP servers to connect to at startup (Claude-Desktop-style config file).
     mcp_config_path: str = ".harness/mcp.json"
+    # Where the memory tool and the automatic activity tracker write notes.
+    memory_dir: str = ".harness/memory"
+    # Sub-agent roles the coordinator can delegate to (empty file = no delegate tool).
+    roles_config_path: str = ".harness/roles.json"
 
     @classmethod
     def load(cls) -> "Config":
@@ -65,4 +85,6 @@ class Config:
             sessions_dir=os.getenv("HARNESS_SESSIONS_DIR", cls.sessions_dir),
             logs_dir=os.getenv("HARNESS_LOGS_DIR", cls.logs_dir),
             mcp_config_path=os.getenv("HARNESS_MCP_CONFIG", cls.mcp_config_path),
+            memory_dir=os.getenv("HARNESS_MEMORY_DIR", cls.memory_dir),
+            roles_config_path=os.getenv("HARNESS_ROLES_CONFIG", cls.roles_config_path),
         )

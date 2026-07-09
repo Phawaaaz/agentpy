@@ -68,6 +68,41 @@ They connect automatically on startup; `/mcp`, `/mcp connect <name>`, and
 else (risk is inferred from the server's own tool annotations, defaulting to
 `write` when it doesn't say).
 
+## Memory
+
+Two independent pieces (see DESIGN.md D16 for why they're separate):
+
+- A `memory` **tool** the model can call itself (`view`/`create`/
+  `str_replace`/`insert`/`delete`/`rename`) to persist notes across turns and
+  sessions — same shape as Anthropic's memory-tool convention, but a plain
+  neutral tool so it works on every provider, not just Claude.
+- An automatic **activity tracker** that needs no tool call at all: it
+  watches the same events the CLI already prints and keeps
+  `.harness/memory/activity.md` up to date with the current task, files
+  touched, and tool usage counts. Check it anytime with `/memory`.
+
+Both write into `HARNESS_MEMORY_DIR` (default `.harness/memory`).
+
+## Skills
+
+`/review`, `/verify`, `/test`, `/docs` run one of the pipeline's stage
+prompts on demand, in your current conversation (not an isolated run) —
+useful when you want "review what we just did" without kicking off the full
+autonomous pipeline. Give a task explicitly (`/verify the login flow`) or
+omit it to reuse the current task tracked in memory.
+
+## Multi-agent
+
+Copy `roles.json.example` to `.harness/roles.json` (or point
+`HARNESS_ROLES_CONFIG` elsewhere) to define sub-agent roles — e.g. a
+read-only `researcher`, a `reviewer`, a `coder`. Once any roles are
+configured, a `delegate(role, task)` tool appears: the agent can hand a
+self-contained sub-task to a role-specific sub-agent and get back its final
+answer, same as calling any other tool. Sub-agents share your `model`,
+`permission_mode`, and memory directory — write something to memory and any
+sub-agent (or the coordinator) can read it back. `/roles` lists what's
+configured. No roles configured = no `delegate` tool = unchanged behavior.
+
 ## Autonomous pipeline
 
 For a task you want worked end-to-end unattended:
@@ -96,6 +131,9 @@ Inside the CLI, lines starting with `/` are commands (everything else is a task)
 | `/load <id>` | Resume a saved session |
 | `/sessions` | List saved sessions |
 | `/cost` | Show token usage + estimated cost |
+| `/memory` | Show what the harness has been working on |
+| `/review`, `/verify`, `/test`, `/docs` | Run a pipeline stage's prompt on demand (skills) |
+| `/roles` | List configured sub-agent roles (`delegate` target) |
 | `/help` | List commands |
 
 Sessions auto-save after each turn to `.harness/sessions/`; events are traced to
@@ -117,6 +155,9 @@ python tests/smoke_test.py    # full agent loop against a fake model
 python tests/phase2_test.py   # context compaction, persistence, usage tracking
 python tests/mcp_test.py      # MCP tool wrapping, risk mapping, call dispatch
 python tests/pipeline_test.py # stage sequencing, stuck detection, repair loop
+python tests/memory_test.py   # memory tool CRUD/confinement, activity tracker
+python tests/cli_skills_test.py   # /review /verify /test /docs commands
+python tests/multiagent_test.py   # delegate tool, FilteredRegistry, no recursion
 ```
 
-All four run against fakes — no key, no network — and should print `... PASSED`.
+All seven run against fakes — no key, no network — and should print `... PASSED`.
