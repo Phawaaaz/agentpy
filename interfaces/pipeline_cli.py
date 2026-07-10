@@ -15,6 +15,7 @@ from tools.registry import registry
 
 # Importing these modules registers their tools onto the shared registry.
 import tools.filesystem  # noqa: F401
+import tools.search  # noqa: F401
 import tools.shell  # noqa: F401
 import tools.web  # noqa: F401
 
