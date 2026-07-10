@@ -62,13 +62,14 @@ class Orchestrator:
                     response.usage.completion_tokens,
                 )
 
-            # The model may narrate its reasoning alongside (or instead of) tools.
-            if response.text and response.text.strip():
-                self.on_event("thinking", response.text.strip())
-
-            # No tool calls => the model is done.
+            # No tool calls => the model is done; the interface prints the
+            # answer itself, so don't also emit it as "thinking".
             if not response.tool_calls:
                 return response.text or ""
+
+            # The model may narrate its reasoning alongside its tool calls.
+            if response.text and response.text.strip():
+                self.on_event("thinking", response.text.strip())
 
             # Otherwise run each requested tool and feed results back in.
             for tool_call in response.tool_calls:
