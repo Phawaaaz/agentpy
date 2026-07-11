@@ -43,11 +43,20 @@ depends on the `Provider` interface, the `Registry`, and `context_engine/`
 (for `Conversation`), never on a concrete provider or an interface. Wiring
 happens only in `interfaces/` via `providers/factory.py`.
 
+`auth/` isn't in the stack above because nothing below `interfaces/` needs
+to know accounts exist: `interfaces/cli.py` is the only caller of
+`auth/users.py`, and it uses `Config.for_user(username)` to turn "who's
+logged in" into ordinary `Config` fields (`sessions_dir`, `memory_dir`, ...)
+before anything else is constructed. `engine/` and `context_engine/` just
+see a `Config` with different paths in it — same as any other config value
+(D22).
+
 ## Component reference
 
 | File | Type(s) | Responsibility |
 |------|---------|----------------|
-| `config.py` | `Config` | Resolve settings from env/`.env` once |
+| `config.py` | `Config`, `Config.for_user` | Resolve settings from env/`.env` once; namespace per-user dirs (D22) |
+| `auth/users.py` | `UserStore`, `hash_password`, `verify_password` | Salted/hashed username+password accounts (D22) |
 | `providers/base.py` | `Provider`, `Response`, `ToolCall` | The model abstraction + normalized data |
 | `providers/anthropic_provider.py` | `AnthropicProvider` | Neutral ↔ Claude API translation |
 | `providers/openai_provider.py` | `OpenAIProvider` | OpenAI + any compatible endpoint |
@@ -264,6 +273,21 @@ session keeps its old provider/config/agent untouched (D21). No new
 abstraction: this is the same `build_provider(config)` call `main()` already
 makes once at startup, just callable again mid-session.
 
+## Multi-user login (`auth/`)
+
+`interfaces/cli.py`'s `main()` calls `_login(config.users_config_path)`
+before anything else is built. `_login` reads `auth/users.py`'s `UserStore`
+(a JSON file, same external-config shape as `.harness/mcp.json` /
+`roles.json` / `skills.json`): an unrecognized username walks through account
+creation (choose + confirm a password), a recognized one is checked against
+its stored salted PBKDF2 hash. Either way it returns a username, which
+`main()` immediately turns into `config = config.for_user(username)` —
+`sessions_dir`, `memory_dir`, `logs_dir`, and `offload_dir` all get the
+username appended, so two logged-in users never read or write each other's
+data even though they share the same process's `registry`, MCP connections,
+and org-wide `.harness/*.json` config (D22). `HARNESS_USER`/`HARNESS_PASSWORD`
+skip the interactive prompt for scripted/demo runs.
+
 ## Extension points (where new work goes)
 
 | To add… | Do this | Files touched |
@@ -299,8 +323,11 @@ Step-by-step recipes are in [CONTRIBUTING.md](CONTRIBUTING.md).
   tools), autonomous multi-stage pipeline (`pipeline/`, stops before push/PR),
   agent memory (`context_engine/memory_tool.py` + `context_engine/memory_tracker.py`,
   D16), skill commands (`/review`/`/verify`/`/test`/`/docs`), multi-agent
-  delegation (`multiagent/`, D17). Still open: HTTP API, per-user config,
-  Slack interface, web *search*, pipeline push/PR automation, cross-model
-  review, parallel slices, labeling sub-agent activity in the CLI output.
+  delegation (`multiagent/`, D17), runtime model switching (`/model`, D21),
+  multi-user login + per-user session isolation (`auth/`, D22). Still open:
+  HTTP API, Slack interface, web *search*, pipeline push/PR automation,
+  cross-model review, parallel slices, labeling sub-agent activity in the CLI
+  output, and account management beyond signup/verify (no password reset,
+  no roles/permissions per account yet).
 
 These phases slot into the existing folders without reshaping the loop.

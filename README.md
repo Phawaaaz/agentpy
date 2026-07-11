@@ -18,6 +18,7 @@ minimal and grow into a company-wide coding + automation assistant.
 interfaces/     thin entry points (CLI, pipeline CLI now; Slack / API later)
 engine/         orchestrator (the loop) + permissions + registry + MCP client + built-in tools (engine/builtin/)
 context_engine/ conversation compaction + memory tool + activity tracker + session persistence
+auth/           user accounts: salted/hashed passwords, per-user session isolation
 providers/      model abstraction (anthropic + openai SDKs => any model)
 pipeline/       optional outer loop: multi-stage autonomous runs
 observability/  token usage + cost estimate + event logging
@@ -56,6 +57,15 @@ keeps your conversation history.
 ```bash
 python main.py
 ```
+
+The CLI starts with a sign-in prompt: enter a username, and if it doesn't
+exist yet you'll be asked to choose a password and it's created on the spot
+(passwords are PBKDF2-hashed with a random per-user salt — see DESIGN.md
+D22 — never stored in plaintext, in `HARNESS_USERS_FILE`, default
+`.harness/users.json`). Each user's sessions, memory, logs, and offloaded
+tool output live under their own subdirectory, so concurrent users never see
+each other's data. For scripted or demo use, set `HARNESS_USER` +
+`HARNESS_PASSWORD` in `.env` to skip the interactive prompt.
 
 Then type a task, e.g. *"list the files here and tell me what this project is."*
 
@@ -161,6 +171,7 @@ Inside the CLI, lines starting with `/` are commands (everything else is a task)
 | `/memory` | Show what the harness has been working on |
 | `/model` | Show the current model |
 | `/model <name>` | Switch model mid-session, e.g. `/model ollama/llama3.2:3b` (conversation history kept) |
+| `/whoami` | Show the logged-in user |
 | `/review`, `/verify`, `/test`, `/docs` | Run a pipeline stage's prompt on demand (skills) |
 | `/roles` | List configured sub-agent roles (`delegate` target) |
 | `/help` | List commands |
@@ -190,6 +201,7 @@ python tests/external_skills_test.py # skills.json loading + prompt substitution
 python tests/multiagent_test.py     # delegate tool, FilteredRegistry, no recursion
 python tests/offload_test.py        # oversized output -> file + preview, not lost
 python tests/model_switch_test.py   # /model command, history preserved across a switch
+python tests/auth_test.py           # password hashing, UserStore, login flow, per-user dirs
 ```
 
-All ten run against fakes — no key, no network — and should print `... PASSED`.
+All eleven run against fakes — no key, no network — and should print `... PASSED`.

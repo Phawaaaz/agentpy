@@ -5,7 +5,7 @@ loaded once from environment variables (and a .env file if present).
 """
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 try:
     from dotenv import load_dotenv
@@ -69,6 +69,21 @@ class Config:
     skills_config_path: str = ".harness/skills.json"
     # Where oversized tool output gets written instead of silently truncated.
     offload_dir: str = ".harness/offload"
+    # Where user accounts (username + salted/hashed password) are stored.
+    users_config_path: str = ".harness/users.json"
+
+    def for_user(self, username: str) -> "Config":
+        """A copy of this Config with per-user data directories namespaced by
+        username, so concurrent users never see each other's sessions,
+        memory, logs, or offloaded output. Org-wide config (model, MCP
+        servers, roles, skills) is untouched -- those aren't a user's data."""
+        return replace(
+            self,
+            sessions_dir=os.path.join(self.sessions_dir, username),
+            memory_dir=os.path.join(self.memory_dir, username),
+            logs_dir=os.path.join(self.logs_dir, username),
+            offload_dir=os.path.join(self.offload_dir, username),
+        )
 
     @classmethod
     def load(cls) -> "Config":
@@ -93,4 +108,5 @@ class Config:
             roles_config_path=os.getenv("HARNESS_ROLES_CONFIG", cls.roles_config_path),
             skills_config_path=os.getenv("HARNESS_SKILLS_CONFIG", cls.skills_config_path),
             offload_dir=os.getenv("HARNESS_OFFLOAD_DIR", cls.offload_dir),
+            users_config_path=os.getenv("HARNESS_USERS_FILE", cls.users_config_path),
         )

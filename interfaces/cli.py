@@ -6,9 +6,12 @@ All agent logic lives in engine/. Slash commands (/new, /save, ...) manage the
 session; anything else is a task for the agent.
 """
 
+import getpass
+import os
 from dataclasses import replace
 from datetime import datetime
 
+from auth.users import UserStore
 from config import Config
 from context_engine.compaction import Conversation, make_provider_summarizer
 from context_engine.memory_tracker import MemoryTracker
@@ -41,6 +44,7 @@ HELP = """commands:
   /memory              show what the harness has been working on
   /model               show the current model
   /model <name>        switch model mid-session (conversation history kept)
+  /whoami              show the logged-in user
   /mcp                 list connected MCP servers and their tools
   /mcp connect <name>  connect a server from the MCP config file
   /mcp disconnect <n>  disconnect a server and remove its tools
@@ -121,10 +125,11 @@ def _make_event_handler(*listeners):
 class Session:
     """Bundles the mutable per-session objects the CLI juggles."""
 
-    def __init__(self, config: Config, provider, on_event):
+    def __init__(self, config: Config, provider, on_event, username: str = ""):
         self.config = config
         self.provider = provider
         self.on_event = on_event
+        self.username = username
         self.usage = UsageTracker()
         self.id = datetime.now().strftime("%Y%m%d-%H%M%S")
         self.conversation = self._new_conversation()
@@ -303,6 +308,8 @@ def _handle_command(
         print(memory_tracker.summary())
     elif cmd == "/model":
         _handle_model_command(args, session)
+    elif cmd == "/whoami":
+        print(session.username or "(not logged in)")
     elif cmd == "/mcp":
         _handle_mcp_command(args, mcp_manager, session.config)
     elif cmd == "/roles":
@@ -327,8 +334,58 @@ def _connect_configured_mcp_servers(mcp_manager: MCPManager, config: Config) -> 
             print(f"  mcp '{server.name}': failed to connect ({exc})")
 
 
+def _login(users_config_path: str, max_attempts: int = 3) -> str:
+    """Authenticate a user against `users_config_path`, registering a new
+    account on first sight of a username. Returns the logged-in username.
+
+    `HARNESS_USER`/`HARNESS_PASSWORD` skip the interactive prompt (for
+    scripted/demo use, same "env var first" convention as the rest of
+    Config.load()); with only `HARNESS_USER` set, the username is
+    pre-filled but the password is still prompted for."""
+    store = UserStore(users_config_path)
+    env_user = os.getenv("HARNESS_USER")
+    env_password = os.getenv("HARNESS_PASSWORD")
+    if env_user and env_password:
+        if store.exists(env_user):
+            if not store.verify(env_user, env_password):
+                raise SystemExit(f"login failed: wrong HARNESS_PASSWORD for '{env_user}'")
+        else:
+            store.register(env_user, env_password)
+            print(f"  created new account '{env_user}'")
+        return env_user
+
+    print("=" * 60)
+    print("  Agentic Harness  —  sign in")
+    print("=" * 60)
+    for attempt in range(max_attempts):
+        username = (env_user or input("username: ")).strip()
+        if not username:
+            continue
+        if store.exists(username):
+            password = getpass.getpass("password: ")
+            if store.verify(username, password):
+                return username
+            print("  wrong password, try again")
+        else:
+            print(f"  no such user '{username}' -- creating a new account")
+            password = getpass.getpass("choose a password: ")
+            confirm = getpass.getpass("confirm password: ")
+            if password != confirm:
+                print("  passwords did not match, try again")
+                continue
+            try:
+                store.register(username, password)
+            except ValueError as exc:
+                print(f"  {exc}")
+                continue
+            return username
+    raise SystemExit("too many failed login attempts")
+
+
 def main() -> None:
     config = Config.load()
+    username = _login(config.users_config_path)
+    config = config.for_user(username)
     provider = build_provider(config)
     run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
 
@@ -360,12 +417,13 @@ def main() -> None:
             )
         )
 
-    session = Session(config, provider, on_event)
+    session = Session(config, provider, on_event, username=username)
     store = SessionStore(config.sessions_dir)
     mcp_manager = MCPManager(registry)
 
     print("=" * 60)
     print("  Agentic Harness  —  Phase 2 (CLI)")
+    print(f"  user: {username}")
     print(f"  model: {config.model}")
     print(f"  permission mode: {config.permission_mode}")
     print(f"  tools: {', '.join(t.name for t in registry.all())}")

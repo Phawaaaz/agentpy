@@ -41,9 +41,10 @@ context_engine/ everything persisted/remembered: compaction, memory tool, activi
 providers/      Provider interface + per-model adapters (Anthropic, OpenAI-compatible)
 pipeline/       optional outer loop: multi-stage autonomous runs, composes engine/ (D15)
 multiagent/     optional outer layer: delegate-to-sub-agent tool, composes engine/ (D17)
+auth/           user accounts: salted/hashed passwords, per-user session isolation (D22)
 observability/  token usage + cost estimate + JSONL event logging (D16)
 config.py       settings resolved once from env/.env, injected at the edge
-tests/          smoke/phase2/mcp/pipeline/memory/cli_skills/external_skills/multiagent/offload/model_switch_test.py — all fakes, no key
+tests/          smoke/phase2/mcp/pipeline/memory/cli_skills/external_skills/multiagent/offload/model_switch/auth_test.py — all fakes, no key
 ```
 
 ## Hard rules (enforced, not suggestions)
@@ -81,13 +82,14 @@ python tests/external_skills_test.py  # prints: EXTERNAL SKILLS TESTS PASSED
 python tests/multiagent_test.py   # prints: MULTIAGENT TESTS PASSED
 python tests/offload_test.py      # prints: OFFLOAD TESTS PASSED
 python tests/model_switch_test.py # prints: MODEL SWITCH TESTS PASSED
+python tests/auth_test.py         # prints: AUTH TESTS PASSED
 
 # run for real (after: cp .env.example .env; set HARNESS_MODEL + HARNESS_API_KEY):
 python main.py                    # interactive CLI
 python pipeline.py "<task>"       # autonomous multi-stage pipeline (see pipeline/)
 ```
 
-**Always run all ten test files after a change** and keep them passing.
+**Always run all eleven test files after a change** and keep them passing.
 New core logic must be testable with fakes — if it can only be tested against a
 live API, it's in the wrong layer.
 
@@ -115,6 +117,11 @@ live API, it's in the wrong layer.
 - **Switch models at runtime:** `/model <name>` in the CLI rebuilds the
   provider from a new model string and keeps conversation history (D21). No
   code needed to use it; `HARNESS_MODEL` still sets the starting model.
+- **Multi-user login:** the CLI prompts for a username/password at startup
+  (`auth/users.py`'s `UserStore`, salted PBKDF2 hashes, no plaintext), and
+  namespaces each user's sessions/memory/logs/offload dir by username
+  (`Config.for_user`, D22). `HARNESS_USER`/`HARNESS_PASSWORD` skip the
+  prompt for scripted use.
 
 ## Environment / platform notes
 

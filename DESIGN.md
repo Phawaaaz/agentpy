@@ -422,6 +422,56 @@ overrides (`delegate` sub-agents keep using whatever `Provider` the
 coordinator was built with at startup, not whatever `/model` last switched
 to) — no current use case forces that yet.
 
+### D22 — Multi-user login via a JSON account file + Config namespacing
+**Decision:** `auth/users.py`'s `UserStore` holds username -> salted/hashed
+password records in a JSON file (`.harness/users.json` by default, same
+external-config shape as D14/D17/D18's MCP/roles/skills files). Passwords are
+hashed with PBKDF2-HMAC-SHA256 (200,000 iterations, a random 16-byte salt per
+user, stdlib `hashlib`/`secrets` only) — never stored or logged in plaintext.
+`interfaces/cli.py`'s `main()` calls `_login()` before building anything
+else; a returning username is verified, a new one is registered on the spot
+(choose + confirm a password). The returned username feeds straight into
+`Config.for_user(username)`, a new method on `Config` that returns a copy
+with `sessions_dir`, `memory_dir`, `logs_dir`, and `offload_dir` all suffixed
+with the username — every other field (model, permission mode, MCP/roles/
+skills config paths) stays shared and org-wide.
+**Why a new top-level package instead of folding into `context_engine/` or
+`interfaces/`:** authentication is a distinct concern from both — it's not
+something the agent remembers (`context_engine/`) and it's not interface
+plumbing (`interfaces/`), it's "who is allowed to be here and whose data is
+whose." Keeping it a separate, small package means it can be swapped for a
+real identity provider later (SSO, OAuth, a company directory) by replacing
+`auth/users.py` behind the same two calls (`_login`, `Config.for_user`)
+without interfaces/cli.py's other 300+ lines caring.
+**Why namespace directories instead of a shared store keyed by user:** every
+consumer of `config.sessions_dir` / `memory_dir` / `logs_dir` / `offload_dir`
+(`SessionStore`, `MemoryTracker`, `EventLogger`, `maybe_offload`) already
+just takes "a directory" and knows nothing about users — namespacing the
+path once, at login, means zero of those classes need a `username` parameter
+threaded through them. This is the same trick `Config.for_user` name implies:
+push the per-user decision to the one place (`main()`, right after login)
+instead of every downstream consumer.
+**Why PBKDF2 over bcrypt/argon2:** those need an extra dependency; PBKDF2 via
+stdlib `hashlib` needs none, matching this repo's existing bias toward native
+SDKs over extra packages (D3). 200,000 iterations is OWASP's current
+minimum-recommended floor for PBKDF2-SHA256.
+**Trade-off:** this is real authentication (salted, hashed, never
+plaintext) but not a real *security boundary* — anyone with filesystem
+access to `.harness/users.json` or the running process can read any user's
+files directly; there's no encryption at rest, no session tokens, no rate
+limiting beyond the interactive prompt's 3-attempt cap, and the
+`HARNESS_USER`/`HARNESS_PASSWORD` env-var shortcut (added for scripted/demo
+use, same "env var first" convention as the rest of `Config.load()`) means a
+`.env` file with those set bypasses the prompt entirely. Acceptable for what
+this is today — a local CLI tool giving each person their own session/memory
+namespace, not a multi-tenant server — and the account/namespacing layer is
+exactly what a real auth system would sit behind later without changing how
+`context_engine/`, `engine/`, or `pipeline/` work.
+**Alternatives considered:** OS-user-based isolation (`os.getlogin()`) —
+rejected because it doesn't give the harness its own login step or work
+identically across machines; a database-backed user store — rejected as
+premature for the account volumes a CLI tool has (same reasoning as D12).
+
 ---
 
 ## Known limitations & future work
@@ -430,7 +480,14 @@ to) — no current use case forces that yet.
   heuristic (`estimate_tokens`) is approximate; the actual per-turn usage from
   the API is exact and used for cost. Good enough to decide *when* to compact.
 - **Prices drift:** `PRICING` in `observability/usage.py` is manually maintained.
-- **Single-user persistence:** JSON session files; see D12.
+- **Per-user, but still single-writer, JSON persistence:** D22 namespaces
+  sessions/memory/logs/offload by username so different users don't collide,
+  but each user's own store is still the JSON-file `SessionStore` from D12 --
+  no concurrent-write protection *within* one account.
+- **Auth is real hashing, not a security boundary:** see D22's trade-off --
+  no encryption at rest, no session tokens/expiry, no password reset, and
+  filesystem access to `.harness/users.json` or the running process reads
+  any user's data directly regardless of login.
 - **Parallel tool calls run sequentially:** the loop executes a turn's tool calls
   in order. Fine for correctness; a future optimization could parallelize
   independent, read-only calls.
