@@ -83,7 +83,7 @@ def test_explicit_task_overrides_memory():
         session, store, tracker = FakeSession(), FakeStore(), FakeMemoryTracker(task="stale task")
 
         def run():
-            _handle_skill_command("verify", ["a", "fresh", "task"], session, store, tracker)
+            _handle_skill_command("verify", ["a", "fresh", "task"], session, store, tracker, _SKILLS)
 
         _run_in(repo, run)
         assert "a fresh task" in session.agent.last_prompt
@@ -98,7 +98,7 @@ def test_falls_back_to_memory_task():
         session, store, tracker = FakeSession(), FakeStore(), FakeMemoryTracker(task="the current task")
 
         def run():
-            _handle_skill_command("docs", [], session, store, tracker)
+            _handle_skill_command("docs", [], session, store, tracker, _SKILLS)
 
         _run_in(repo, run)
         assert "the current task" in session.agent.last_prompt
@@ -111,7 +111,7 @@ def test_no_task_anywhere_does_not_call_agent():
         session, store, tracker = FakeSession(), FakeStore(), FakeMemoryTracker(task="")
 
         def run():
-            _handle_skill_command("test", [], session, store, tracker)
+            _handle_skill_command("test", [], session, store, tracker, _SKILLS)
 
         _run_in(repo, run)
         assert session.agent.last_prompt is None  # never ran -- nothing to check
@@ -119,12 +119,30 @@ def test_no_task_anywhere_does_not_call_agent():
         print("  no task anywhere -> skips the agent call OK")
 
 
+def test_dispatch_reaches_an_externally_merged_skill():
+    """_handle_skill_command doesn't know or care whether a skill came from
+    the built-in dict or an external skills.json -- both are just
+    (task, diff_stat) -> str callables in the `skills` dict passed in."""
+    with tempfile.TemporaryDirectory() as repo:
+        _init_repo(repo)
+        session, store, tracker = FakeSession(), FakeStore(), FakeMemoryTracker(task="")
+        merged = dict(_SKILLS)
+        merged["style-check"] = lambda task, diff_stat: f"CUSTOM SKILL for: {task} | {diff_stat}"
+
+        def run():
+            _handle_skill_command("style-check", ["check this"], session, store, tracker, merged)
+
+        _run_in(repo, run)
+        assert session.agent.last_prompt.startswith("CUSTOM SKILL for: check this")
+        print("  externally merged skill reachable through the same dispatch OK")
+
+
 def test_non_git_directory_falls_back_gracefully():
     with tempfile.TemporaryDirectory() as not_a_repo:
         session, store, tracker = FakeSession(), FakeStore(), FakeMemoryTracker(task="a task")
 
         def run():
-            _handle_skill_command("review", [], session, store, tracker)
+            _handle_skill_command("review", [], session, store, tracker, _SKILLS)
 
         _run_in(not_a_repo, run)
         assert "not a git repository" in session.agent.last_prompt
@@ -136,6 +154,7 @@ def main():
     test_explicit_task_overrides_memory()
     test_falls_back_to_memory_task()
     test_no_task_anywhere_does_not_call_agent()
+    test_dispatch_reaches_an_externally_merged_skill()
     test_non_git_directory_falls_back_gracefully()
     print("CLI SKILLS TESTS PASSED")
 

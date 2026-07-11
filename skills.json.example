@@ -1,0 +1,12 @@
+{
+  "skills": {
+    "style-check": {
+      "description": "Review the diff against this project's style conventions.",
+      "prompt": "Review the following change against this project's existing coding conventions (naming, structure, comment style, error handling patterns).\n\nTASK:\n{task}\n\nCHANGES (--stat):\n{diff_stat}\n\nRead the changed files, flag anything that doesn't match the surrounding code's conventions, and fix it. If everything already matches, say so."
+    },
+    "changelog": {
+      "description": "Draft a changelog entry for the current change.",
+      "prompt": "Draft a one-paragraph changelog entry (user-facing, not implementation detail) for this change.\n\nTASK:\n{task}\n\nCHANGES (--stat):\n{diff_stat}\n\nDo not write it to a file unless asked -- just report the draft text."
+    }
+  }
+}

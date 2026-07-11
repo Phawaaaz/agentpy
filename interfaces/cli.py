@@ -17,6 +17,7 @@ from observability.log import EventLogger
 from observability.memory_tracker import MemoryTracker
 from observability.usage import UsageTracker
 from pipeline import stages, worktree
+from pipeline.external_skills import load_external_skills
 from providers.base import ToolCall
 from providers.factory import build_provider
 from store.session_store import SessionStore
@@ -46,11 +47,16 @@ HELP = """commands:
   /roles               list configured sub-agent roles (delegate target)
   /help                show this help
   quit                 exit
-anything else is sent to the agent as a task."""
+anything else is sent to the agent as a task.
+
+custom skills from .harness/skills.json (see skills.json.example) show up as
+commands too, alongside the four built-ins above."""
 
 # Named, on-demand instructions reusing pipeline/stages.py's prompt builders
 # -- the same "skill" idea Ralph implements via Claude Code Skills, adapted
 # to agentpy's own tool-calling loop instead of a second harness underneath.
+# Every value here is a plain (task: str, diff_stat: str) -> str callable;
+# main() merges in .harness/skills.json's user-defined ones the same shape.
 _SKILLS = {
     "review": stages.self_review_prompt,
     "verify": stages.verify_prompt,
@@ -192,7 +198,12 @@ def _handle_roles_command(roles: dict) -> None:
 
 
 def _handle_skill_command(
-    stage: str, args: list[str], session: Session, store: SessionStore, memory_tracker: MemoryTracker
+    stage: str,
+    args: list[str],
+    session: Session,
+    store: SessionStore,
+    memory_tracker: MemoryTracker,
+    skills: dict,
 ) -> None:
     task = " ".join(args) if args else memory_tracker.task
     if not task:
@@ -203,7 +214,7 @@ def _handle_skill_command(
     except worktree.WorktreeError:
         diff = "(not a git repository)"
 
-    prompt = _SKILLS[stage](task, diff)
+    prompt = skills[stage](task, diff)
     print(f"\n[running /{stage}]")
     try:
         answer = session.agent.run(prompt)
@@ -222,6 +233,7 @@ def _handle_command(
     mcp_manager: MCPManager,
     memory_tracker: MemoryTracker,
     roles: dict,
+    skills: dict,
 ) -> bool:
     """Handle a /command. Returns True if input was a command (handled)."""
     if not text.startswith("/"):
@@ -259,8 +271,8 @@ def _handle_command(
         _handle_mcp_command(args, mcp_manager, session.config)
     elif cmd == "/roles":
         _handle_roles_command(roles)
-    elif cmd.lstrip("/") in _SKILLS:
-        _handle_skill_command(cmd.lstrip("/"), args, session, store, memory_tracker)
+    elif cmd.lstrip("/") in skills:
+        _handle_skill_command(cmd.lstrip("/"), args, session, store, memory_tracker, skills)
     else:
         print(f"unknown command: {cmd} (try /help)")
     return True
@@ -291,6 +303,15 @@ def main() -> None:
     tools.memory.set_memory_root(config.memory_dir)
     on_event = _make_event_handler(logger, memory_tracker)
 
+    # Skills are opt-in too: no .harness/skills.json means just the four
+    # built-ins. A name collision with a built-in still works (external
+    # wins) but is surfaced rather than silently shadowing it.
+    skills = dict(_SKILLS)
+    for name, skill in load_external_skills(config.skills_config_path).items():
+        if name in skills:
+            print(f"  skills: '{name}' from {config.skills_config_path} overrides the built-in skill of the same name")
+        skills[name] = skill.build
+
     # Multi-agent is opt-in: no roles configured means no `delegate` tool.
     # Removing this block (and .harness/roles.json) turns it back off with
     # no other change anywhere in the harness.
@@ -311,6 +332,7 @@ def main() -> None:
     print(f"  model: {config.model}")
     print(f"  permission mode: {config.permission_mode}")
     print(f"  tools: {', '.join(t.name for t in registry.all())}")
+    print(f"  skills: {', '.join(sorted(skills))}")
     if roles:
         print(f"  roles: {', '.join(sorted(roles))}")
     _connect_configured_mcp_servers(mcp_manager, config)
@@ -330,7 +352,7 @@ def main() -> None:
             if user_input.lower() in ("quit", "exit", "q"):
                 print("bye")
                 return
-            if _handle_command(user_input, session, store, mcp_manager, memory_tracker, roles):
+            if _handle_command(user_input, session, store, mcp_manager, memory_tracker, roles, skills):
                 continue
 
             memory_tracker.set_task(user_input)

@@ -44,7 +44,7 @@ multiagent/     optional outer layer: delegate-to-sub-agent tool, composes core/
 store/          session persistence (save/resume conversations as JSON)
 observability/  token usage + cost estimate + JSONL event logging + activity tracking (D16)
 config.py       settings resolved once from env/.env, injected at the edge
-tests/          smoke/phase2/mcp/pipeline/memory/cli_skills/multiagent_test.py — all fakes, no key
+tests/          smoke/phase2/mcp/pipeline/memory/cli_skills/external_skills/multiagent_test.py — all fakes, no key
 ```
 
 ## Hard rules (enforced, not suggestions)
@@ -78,6 +78,7 @@ python tests/mcp_test.py          # prints: MCP TESTS PASSED
 python tests/pipeline_test.py     # prints: PIPELINE TESTS PASSED
 python tests/memory_test.py       # prints: MEMORY TESTS PASSED
 python tests/cli_skills_test.py   # prints: CLI SKILLS TESTS PASSED
+python tests/external_skills_test.py  # prints: EXTERNAL SKILLS TESTS PASSED
 python tests/multiagent_test.py   # prints: MULTIAGENT TESTS PASSED
 
 # run for real (after: cp .env.example .env; set HARNESS_MODEL + HARNESS_API_KEY):
@@ -85,7 +86,7 @@ python main.py                    # interactive CLI
 python pipeline.py "<task>"       # autonomous multi-stage pipeline (see pipeline/)
 ```
 
-**Always run all seven test files after a change** and keep them passing.
+**Always run all eight test files after a change** and keep them passing.
 New core logic must be testable with fakes — if it can only be tested against a
 live API, it's in the wrong layer.
 
@@ -103,9 +104,10 @@ live API, it's in the wrong layer.
 - **Add a pipeline stage:** add a prompt builder to `pipeline/stages.py` and
   call it from `pipeline/runner.py`'s stage sequence. The base loop
   (`core/orchestrator.py`) is untouched either way.
-- **Add a skill:** add a prompt builder to `pipeline/stages.py` (or reuse an
-  existing one) and a `/name -> builder` entry in `interfaces/cli.py`'s
-  `_SKILLS` dict.
+- **Add a skill:** no code needed — add an entry to `.harness/skills.json`
+  (copy `skills.json.example`). Only touch `pipeline/stages.py` +
+  `interfaces/cli.py`'s `_SKILLS` dict for a *built-in* skill shipped with
+  the harness itself (D18).
 - **Add a sub-agent role:** add an entry to `.harness/roles.json` (copy
   `roles.json.example`). No code needed (D17); the `delegate` tool picks up
   new roles the next time the CLI starts.
