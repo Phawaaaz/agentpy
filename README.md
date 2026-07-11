@@ -91,6 +91,21 @@ useful when you want "review what we just did" without kicking off the full
 autonomous pipeline. Give a task explicitly (`/verify the login flow`) or
 omit it to reuse the current task tracked in memory.
 
+Add your own by copying `skills.json.example` to `.harness/skills.json` — no
+code needed:
+
+```json
+{"skills": {"style-check": {
+  "description": "Review the diff against our style guide",
+  "prompt": "Review this change against our style guide.\n\nTASK:\n{task}\n\nCHANGES (--stat):\n{diff_stat}"
+}}}
+```
+
+`{task}` and `{diff_stat}` get substituted in; the new command (`/style-check`
+here) shows up alongside the built-ins. Naming a skill the same as a
+built-in overrides it (with a startup notice), so you can also replace
+`/verify`, `/test`, etc. by defining a skill with that exact name.
+
 ## Multi-agent
 
 Copy `roles.json.example` to `.harness/roles.json` (or point
@@ -156,8 +171,9 @@ python tests/phase2_test.py   # context compaction, persistence, usage tracking
 python tests/mcp_test.py      # MCP tool wrapping, risk mapping, call dispatch
 python tests/pipeline_test.py # stage sequencing, stuck detection, repair loop
 python tests/memory_test.py   # memory tool CRUD/confinement, activity tracker
-python tests/cli_skills_test.py   # /review /verify /test /docs commands
-python tests/multiagent_test.py   # delegate tool, FilteredRegistry, no recursion
+python tests/cli_skills_test.py     # /review /verify /test /docs commands
+python tests/external_skills_test.py # skills.json loading + prompt substitution
+python tests/multiagent_test.py     # delegate tool, FilteredRegistry, no recursion
 ```
 
-All seven run against fakes — no key, no network — and should print `... PASSED`.
+All eight run against fakes — no key, no network — and should print `... PASSED`.

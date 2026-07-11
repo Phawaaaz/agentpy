@@ -293,6 +293,32 @@ ever gets called for a given task. Acceptable: that's true of every other
 tool too, and prompting (the role descriptions in the tool's own
 description) is the intended lever, same as any other tool-use trigger rate.
 
+### D18 — External skills are the same JSON-config pattern, a third time
+**Decision:** `pipeline/external_skills.py`'s `load_external_skills` loads
+user-defined skills from `.harness/skills.json` (`{"skills": {"name":
+{"description", "prompt"}}}`); `interfaces/cli.py`'s `main()` merges them
+into the same `skills` dict that holds the four built-ins
+(`_SKILLS`, sourced from `pipeline/stages.py`) and passes that one dict
+through to `_handle_command`/`_handle_skill_command` — neither function
+knows or cares whether a given skill came from Python or from JSON, both
+are just `(task, diff_stat) -> str` callables.
+**Why this is the third occurrence of the same shape:** `tools/mcp_client.py`
+(external servers), `multiagent/roles.py` (external roles), and now this —
+all three are "a directory of names -> small config objects, loaded from a
+JSON file at startup, absent file means the feature is simply not there."
+Worth naming explicitly: if a fourth thing needs external configurability,
+reach for this exact shape again rather than reinventing it.
+**Placeholder substitution uses `str.replace`, not `str.format`.** A user's
+prompt template can legitimately contain other `{`/`}` characters (a JSON
+example, a code snippet) that `str.format` would try to parse as fields and
+fail on (`KeyError`/`IndexError`) — `.replace("{task}", task).replace(
+"{diff_stat}", diff_stat)` only ever touches the two placeholders it knows
+about and leaves everything else alone.
+**Name collisions are allowed but surfaced.** An external skill named
+`verify` silently shadowing the built-in `verify` would be a confusing way
+to lose the pipeline's real verify prompt; `main()` prints a one-line notice
+when this happens rather than either refusing to start or staying silent.
+
 ---
 
 ## Known limitations & future work

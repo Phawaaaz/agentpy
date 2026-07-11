@@ -180,8 +180,24 @@ it (DESIGN.md D15).
 
 ## How to add a SKILL (an on-demand slash command)
 
-Skills are just `pipeline/stages.py` prompt builders invoked individually
-instead of only as part of the pipeline sequence:
+Two ways, depending on whether it's yours-and-yours or the harness's own:
+
+**No code — external skill (the common case):** add an entry to
+`.harness/skills.json` (copy `skills.json.example`):
+
+```json
+{"skills": {"my-skill": {
+  "description": "what it does",
+  "prompt": "Do the thing.\n\nTASK:\n{task}\n\nCHANGES (--stat):\n{diff_stat}"
+}}}
+```
+
+`{task}` and `{diff_stat}` are substituted in (plain string replacement, not
+`str.format` — other `{braces}` in your prompt are left alone). `/my-skill`
+shows up the next time the CLI starts, merged with the built-ins (D18); the
+same name as a built-in overrides it, with a startup notice.
+
+**Built into the harness itself:**
 
 1. Add a `def my_skill_prompt(task: str, diff_stat: str) -> str:` to
    `pipeline/stages.py` (copy `verify_prompt`'s shape).

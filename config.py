@@ -65,6 +65,8 @@ class Config:
     memory_dir: str = ".harness/memory"
     # Sub-agent roles the coordinator can delegate to (empty file = no delegate tool).
     roles_config_path: str = ".harness/roles.json"
+    # User-defined skills (on-demand prompt templates), merged with the built-in ones.
+    skills_config_path: str = ".harness/skills.json"
 
     @classmethod
     def load(cls) -> "Config":
@@ -87,4 +89,5 @@ class Config:
             mcp_config_path=os.getenv("HARNESS_MCP_CONFIG", cls.mcp_config_path),
             memory_dir=os.getenv("HARNESS_MEMORY_DIR", cls.memory_dir),
             roles_config_path=os.getenv("HARNESS_ROLES_CONFIG", cls.roles_config_path),
+            skills_config_path=os.getenv("HARNESS_SKILLS_CONFIG", cls.skills_config_path),
         )

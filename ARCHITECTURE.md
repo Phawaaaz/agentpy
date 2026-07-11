@@ -65,7 +65,8 @@ an interface. Wiring happens only in `interfaces/` via `providers/factory.py`.
 | `pipeline/runner.py` | `PipelineRunner` | Outer multi-stage loop: implement → self-review → verify → test → sync-docs (D15) |
 | `pipeline/worktree.py` | worktree/commit helpers | Isolated git worktree per slice; the stuck-detection signal |
 | `pipeline/state.py` | `SliceState`, `ProgressLog` | Persist slice status + an append-only progress trail |
-| `pipeline/stages.py` | stage prompt builders | One prompt template per stage; reused directly by the CLI's skill commands (D16 area) |
+| `pipeline/stages.py` | stage prompt builders | One prompt template per stage; reused directly by the CLI's skill commands |
+| `pipeline/external_skills.py` | `ExternalSkill`, `load_external_skills` | User-defined skills from `.harness/skills.json`, merged with the built-ins (D18) |
 | `interfaces/pipeline_cli.py` | `main` | `python pipeline.py "<task>"` entry point |
 | `multiagent/coordinator.py` | `build_delegate_tool`, `FilteredRegistry` | The `delegate` tool + the live registry view that hides it from sub-agents (D17) |
 | `multiagent/roles.py` | `AgentRole`, `load_roles` | Sub-agent roles loaded from `.harness/roles.json` |
@@ -191,6 +192,14 @@ or a graceful "(not a git repository)" fallback) and feeds it into the
 fresh isolated run like the pipeline uses. `pipeline/stages.py` itself stays
 a dependency-free leaf module used by both callers; neither `pipeline/runner.py`
 nor `interfaces/cli.py` knows about the other's use of it.
+
+**Adding a skill without touching Python:** `.harness/skills.json`
+(`pipeline/external_skills.py`'s `load_external_skills`) defines more skills
+as `{"name": {"description", "prompt"}}`, where `prompt` is a template with
+`{task}`/`{diff_stat}` placeholders. `main()` merges these into the same
+dict that holds the four built-ins before anything ever dispatches on it —
+`_handle_command`/`_handle_skill_command` never know or care which source a
+given skill came from (D18).
 
 ## Multi-agent (delegation as a tool)
 
