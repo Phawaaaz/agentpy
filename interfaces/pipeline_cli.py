@@ -15,6 +15,7 @@ from tools.registry import registry
 
 # Importing these modules registers their tools onto the shared registry.
 import tools.filesystem  # noqa: F401
+import tools.offload
 import tools.shell  # noqa: F401
 import tools.web  # noqa: F401
 
@@ -59,6 +60,7 @@ def main() -> None:
             "the pipeline will likely get stuck immediately. Set it to 'allowlist' or 'auto' "
             "for the pipeline to make real progress.\n"
         )
+    tools.offload.set_offload_root(config.offload_dir)
     provider = build_provider(config)
     runner = PipelineRunner(provider, registry, config, PipelineConfig.load(), on_event=_on_event)
 

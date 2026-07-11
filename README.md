@@ -118,6 +118,15 @@ answer, same as calling any other tool. Sub-agents share your `model`,
 sub-agent (or the coordinator) can read it back. `/roles` lists what's
 configured. No roles configured = no `delegate` tool = unchanged behavior.
 
+## Large tool output
+
+Any tool result over ~20k characters (a big file, a noisy command, a large
+page fetch) no longer gets hard-truncated and lost — the full output is
+written to a file under `HARNESS_OFFLOAD_DIR` (default `.harness/offload/`),
+and the tool returns a preview plus that path. The model can `read_file` the
+rest if it actually needs it. Applies to `read_file`, `run_command`,
+`fetch_url`, and the memory tool's `view`.
+
 ## Autonomous pipeline
 
 For a task you want worked end-to-end unattended:
@@ -174,6 +183,7 @@ python tests/memory_test.py   # memory tool CRUD/confinement, activity tracker
 python tests/cli_skills_test.py     # /review /verify /test /docs commands
 python tests/external_skills_test.py # skills.json loading + prompt substitution
 python tests/multiagent_test.py     # delegate tool, FilteredRegistry, no recursion
+python tests/offload_test.py        # oversized output -> file + preview, not lost
 ```
 
-All eight run against fakes — no key, no network — and should print `... PASSED`.
+All nine run against fakes — no key, no network — and should print `... PASSED`.

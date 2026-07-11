@@ -67,6 +67,8 @@ class Config:
     roles_config_path: str = ".harness/roles.json"
     # User-defined skills (on-demand prompt templates), merged with the built-in ones.
     skills_config_path: str = ".harness/skills.json"
+    # Where oversized tool output gets written instead of silently truncated.
+    offload_dir: str = ".harness/offload"
 
     @classmethod
     def load(cls) -> "Config":
@@ -90,4 +92,5 @@ class Config:
             memory_dir=os.getenv("HARNESS_MEMORY_DIR", cls.memory_dir),
             roles_config_path=os.getenv("HARNESS_ROLES_CONFIG", cls.roles_config_path),
             skills_config_path=os.getenv("HARNESS_SKILLS_CONFIG", cls.skills_config_path),
+            offload_dir=os.getenv("HARNESS_OFFLOAD_DIR", cls.offload_dir),
         )

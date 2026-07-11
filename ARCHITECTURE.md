@@ -54,6 +54,7 @@ an interface. Wiring happens only in `interfaces/` via `providers/factory.py`.
 | `tools/shell.py` | run_command | Shell tool (self-register) |
 | `tools/mcp_client.py` | `MCPManager`, `MCPServerConfig` | Connect to MCP servers; register/deregister their tools (D14) |
 | `tools/memory.py` | `memory`, `set_memory_root` | The model's own view/create/str_replace/insert/delete/rename tool (D16) |
+| `tools/offload.py` | `maybe_offload`, `set_offload_root` | Oversized tool output -> file + preview, instead of hard truncation (D19) |
 | `core/permissions.py` | `check` | allow / ask / deny decision |
 | `core/context.py` | `Conversation`, `make_provider_summarizer` | Hold history; compact it when over budget |
 | `core/orchestrator.py` | `Orchestrator` | The agent loop + tool gating |
@@ -265,7 +266,9 @@ Step-by-step recipes are in [CONTRIBUTING.md](CONTRIBUTING.md).
 - `config.max_tokens` bounds model output per turn.
 - `config.max_context_tokens` triggers history compaction before the window
   overflows; `keep_recent_messages` stays verbatim.
-- Tool outputs are truncated (~20k chars) to protect the context window.
+- Tool outputs over ~20k chars are offloaded to a file (`tools/offload.py`,
+  D19) instead of truncated away — a preview stays inline, the rest is
+  recoverable via `read_file`.
 - The permission layer gates every action; `dangerous` tools never run silently
   outside `auto` mode.
 - Sessions auto-save after each turn (`store/`); every event is traced to a JSONL

@@ -44,7 +44,7 @@ multiagent/     optional outer layer: delegate-to-sub-agent tool, composes core/
 store/          session persistence (save/resume conversations as JSON)
 observability/  token usage + cost estimate + JSONL event logging + activity tracking (D16)
 config.py       settings resolved once from env/.env, injected at the edge
-tests/          smoke/phase2/mcp/pipeline/memory/cli_skills/external_skills/multiagent_test.py — all fakes, no key
+tests/          smoke/phase2/mcp/pipeline/memory/cli_skills/external_skills/multiagent/offload_test.py — all fakes, no key
 ```
 
 ## Hard rules (enforced, not suggestions)
@@ -80,13 +80,14 @@ python tests/memory_test.py       # prints: MEMORY TESTS PASSED
 python tests/cli_skills_test.py   # prints: CLI SKILLS TESTS PASSED
 python tests/external_skills_test.py  # prints: EXTERNAL SKILLS TESTS PASSED
 python tests/multiagent_test.py   # prints: MULTIAGENT TESTS PASSED
+python tests/offload_test.py      # prints: OFFLOAD TESTS PASSED
 
 # run for real (after: cp .env.example .env; set HARNESS_MODEL + HARNESS_API_KEY):
 python main.py                    # interactive CLI
 python pipeline.py "<task>"       # autonomous multi-stage pipeline (see pipeline/)
 ```
 
-**Always run all eight test files after a change** and keep them passing.
+**Always run all nine test files after a change** and keep them passing.
 New core logic must be testable with fakes — if it can only be tested against a
 live API, it's in the wrong layer.
 

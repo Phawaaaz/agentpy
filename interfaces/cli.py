@@ -27,6 +27,7 @@ from tools.registry import Tool, registry
 # Importing these modules registers their tools onto the shared registry.
 import tools.filesystem  # noqa: F401
 import tools.memory  # noqa: F401
+import tools.offload
 import tools.shell  # noqa: F401
 import tools.web  # noqa: F401
 
@@ -301,6 +302,7 @@ def main() -> None:
     logger = EventLogger(config.logs_dir, run_id)
     memory_tracker = MemoryTracker(config.memory_dir, run_id)
     tools.memory.set_memory_root(config.memory_dir)
+    tools.offload.set_offload_root(config.offload_dir)
     on_event = _make_event_handler(logger, memory_tracker)
 
     # Skills are opt-in too: no .harness/skills.json means just the four

@@ -319,6 +319,37 @@ about and leaves everything else alone.
 to lose the pipeline's real verify prompt; `main()` prints a one-line notice
 when this happens rather than either refusing to start or staying silent.
 
+### D19 — Offload oversized tool output instead of truncating it away
+**Decision:** `tools/offload.py`'s `maybe_offload(text, max_inline, label)` is
+the one place every tool's "this output might be huge" logic goes through.
+Under the limit, text passes through unchanged. Over it, the full text is
+written to a content-hashed file under `config.offload_dir`
+(`.harness/offload/`, default) and the tool returns a preview plus the file
+path instead. `tools/filesystem.py` (`read_file`), `tools/shell.py`
+(`run_command`), `tools/web.py` (`fetch_url`), and `tools/memory.py`
+(`_view`) all call it instead of each hand-rolling `text[:N] + "...
+[truncated]"`.
+**Why:** the old behavior didn't just shorten output, it **destroyed** the
+rest of it — if a command produced 100K characters and the limit was 20K,
+the last 80K were gone, unrecoverable, no matter how much the model
+subsequently needed them. Offloading keeps the full output on disk and
+recoverable via the same `read_file` tool the model already has.
+**Deterministic, not incidental:** the on-disk filename is a hash of the
+content (`{label}-{sha256[:16]}.txt`), not a timestamp or a counter — the
+same oversized output offloaded twice reuses the same file rather than
+writing a duplicate, and running the test suite twice produces identical
+filenames rather than an ever-growing directory.
+**Why one shared function instead of four separate truncation blocks:** all
+four call sites had the *exact* same shape (`if len(x) > N: x = x[:N] +
+"..."`) with nothing tool-specific — that's the textbook "reuse existing
+utilities, avoid duplicate code" case, not a place for four subtly
+different heuristics to drift apart over time.
+**Trade-off:** every offloaded output now costs a small disk write and a
+`read_file` round-trip if the model actually needs more of it (vs. having
+the whole thing already truncated in context). Accepted — for oversized
+output the model rarely needs to read every character of, the disk write is
+cheap and the alternative was silent, permanent data loss.
+
 ---
 
 ## Known limitations & future work

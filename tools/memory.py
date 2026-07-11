@@ -14,6 +14,7 @@ path-traversal protection a text-editor tool needs for untrusted model input.
 
 import os
 
+from .offload import maybe_offload
 from .registry import Tool, registry
 
 _MAX_OUTPUT = 20_000
@@ -41,12 +42,6 @@ def _resolve(path: str) -> str:
     return candidate_abs
 
 
-def _truncate(text: str) -> str:
-    if len(text) > _MAX_OUTPUT:
-        return text[:_MAX_OUTPUT] + "\n... [truncated]"
-    return text
-
-
 def _view(path: str, view_range: list[int] | None) -> str:
     full = _resolve(path)
     if not os.path.exists(full):
@@ -67,7 +62,7 @@ def _view(path: str, view_range: list[int] | None) -> str:
         numbered = [f"{i}: {line}" for i, line in enumerate(lines, start=start)]
     else:
         numbered = [f"{i}: {line}" for i, line in enumerate(lines, start=1)]
-    return _truncate("\n".join(numbered) or "(empty file)")
+    return maybe_offload("\n".join(numbered), _MAX_OUTPUT, "memory_view") or "(empty file)"
 
 
 def _create(path: str, file_text: str) -> str:

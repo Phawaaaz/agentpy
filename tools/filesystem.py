@@ -5,6 +5,7 @@ Importing this module registers the tools onto the shared registry.
 
 import os
 
+from .offload import maybe_offload
 from .registry import Tool, registry
 
 _MAX_OUTPUT = 20_000  # keep tool output from blowing up the context window
@@ -20,9 +21,7 @@ def read_file(path: str) -> str:
         return f"Error: {path} is not a UTF-8 text file"
     except Exception as exc:
         return f"Error reading {path}: {exc}"
-    if len(content) > _MAX_OUTPUT:
-        content = content[:_MAX_OUTPUT] + "\n... [truncated]"
-    return content or "(empty file)"
+    return maybe_offload(content, _MAX_OUTPUT, "read_file") or "(empty file)"
 
 
 def write_file(path: str, content: str) -> str:
