@@ -6,6 +6,7 @@ All agent logic lives in engine/. Slash commands (/new, /save, ...) manage the
 session; anything else is a task for the agent.
 """
 
+from dataclasses import replace
 from datetime import datetime
 
 from config import Config
@@ -22,7 +23,7 @@ from observability.usage import UsageTracker
 from pipeline import stages, worktree
 from pipeline.external_skills import load_external_skills
 from providers.base import ToolCall
-from providers.factory import build_provider
+from providers.factory import OPENAI_COMPATIBLE, build_provider
 
 # Importing these modules registers their tools onto the shared registry.
 import context_engine.memory_tool  # noqa: F401
@@ -38,6 +39,8 @@ HELP = """commands:
   /sessions            list saved sessions
   /cost                show token usage and estimated cost
   /memory              show what the harness has been working on
+  /model               show the current model
+  /model <name>        switch model mid-session (conversation history kept)
   /mcp                 list connected MCP servers and their tools
   /mcp connect <name>  connect a server from the MCP config file
   /mcp disconnect <n>  disconnect a server and remove its tools
@@ -154,6 +157,21 @@ class Session:
     def rebuild_agent(self) -> None:
         self.agent = self._new_agent()
 
+    def switch_model(self, model: str) -> None:
+        """Swap the active model without losing conversation history.
+
+        Builds a fresh provider (and orchestrator) from a Config that differs
+        only in `model`; the existing Conversation object -- messages and
+        summary -- is reused as-is, just re-pointed at the new provider's
+        summarizer.
+        """
+        new_config = replace(self.config, model=model)
+        new_provider = build_provider(new_config)  # raises before anything is mutated
+        self.config = new_config
+        self.provider = new_provider
+        self.conversation.summarizer = make_provider_summarizer(self.provider)
+        self.agent = self._new_agent()
+
 
 def _handle_mcp_command(args: list[str], mcp_manager: MCPManager, config: Config) -> None:
     if not args:
@@ -188,6 +206,21 @@ def _handle_mcp_command(args: list[str], mcp_manager: MCPManager, config: Config
         print(f"disconnected '{rest[0]}'" if mcp_manager.disconnect(rest[0]) else f"'{rest[0]}' was not connected")
     else:
         print("usage: /mcp | /mcp connect <name> | /mcp disconnect <name>")
+
+
+def _handle_model_command(args: list[str], session: Session) -> None:
+    if not args:
+        print(f"current model: {session.config.model}")
+        print(f"known prefixes: {', '.join(['anthropic', *OPENAI_COMPATIBLE])} "
+              "(or set HARNESS_BASE_URL for a custom OpenAI-compatible endpoint)")
+        return
+    new_model = args[0]
+    try:
+        session.switch_model(new_model)
+    except Exception as exc:
+        print(f"failed to switch model: {exc}")
+        return
+    print(f"switched model -> {new_model}  (conversation history kept)")
 
 
 def _handle_roles_command(roles: dict) -> None:
@@ -268,6 +301,8 @@ def _handle_command(
         print(session.usage.summary())
     elif cmd == "/memory":
         print(memory_tracker.summary())
+    elif cmd == "/model":
+        _handle_model_command(args, session)
     elif cmd == "/mcp":
         _handle_mcp_command(args, mcp_manager, session.config)
     elif cmd == "/roles":

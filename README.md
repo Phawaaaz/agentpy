@@ -47,6 +47,10 @@ HARNESS_API_KEY=sk-...
 Known prefixes: `anthropic/`, `openai/`, `openrouter/`, `groq/`, `together/`,
 `ollama/`. Any other OpenAI-compatible server works by setting `HARNESS_BASE_URL`.
 
+To switch models without restarting, use `/model <name>` inside a running
+session (e.g. `/model ollama/llama3.2:3b`) — it rebuilds the provider and
+keeps your conversation history.
+
 ## Run
 
 ```bash
@@ -155,6 +159,8 @@ Inside the CLI, lines starting with `/` are commands (everything else is a task)
 | `/sessions` | List saved sessions |
 | `/cost` | Show token usage + estimated cost |
 | `/memory` | Show what the harness has been working on |
+| `/model` | Show the current model |
+| `/model <name>` | Switch model mid-session, e.g. `/model ollama/llama3.2:3b` (conversation history kept) |
 | `/review`, `/verify`, `/test`, `/docs` | Run a pipeline stage's prompt on demand (skills) |
 | `/roles` | List configured sub-agent roles (`delegate` target) |
 | `/help` | List commands |
@@ -183,6 +189,7 @@ python tests/cli_skills_test.py     # /review /verify /test /docs commands
 python tests/external_skills_test.py # skills.json loading + prompt substitution
 python tests/multiagent_test.py     # delegate tool, FilteredRegistry, no recursion
 python tests/offload_test.py        # oversized output -> file + preview, not lost
+python tests/model_switch_test.py   # /model command, history preserved across a switch
 ```
 
-All nine run against fakes — no key, no network — and should print `... PASSED`.
+All ten run against fakes — no key, no network — and should print `... PASSED`.

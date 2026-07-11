@@ -43,7 +43,7 @@ pipeline/       optional outer loop: multi-stage autonomous runs, composes engin
 multiagent/     optional outer layer: delegate-to-sub-agent tool, composes engine/ (D17)
 observability/  token usage + cost estimate + JSONL event logging (D16)
 config.py       settings resolved once from env/.env, injected at the edge
-tests/          smoke/phase2/mcp/pipeline/memory/cli_skills/external_skills/multiagent/offload_test.py — all fakes, no key
+tests/          smoke/phase2/mcp/pipeline/memory/cli_skills/external_skills/multiagent/offload/model_switch_test.py — all fakes, no key
 ```
 
 ## Hard rules (enforced, not suggestions)
@@ -80,13 +80,14 @@ python tests/cli_skills_test.py   # prints: CLI SKILLS TESTS PASSED
 python tests/external_skills_test.py  # prints: EXTERNAL SKILLS TESTS PASSED
 python tests/multiagent_test.py   # prints: MULTIAGENT TESTS PASSED
 python tests/offload_test.py      # prints: OFFLOAD TESTS PASSED
+python tests/model_switch_test.py # prints: MODEL SWITCH TESTS PASSED
 
 # run for real (after: cp .env.example .env; set HARNESS_MODEL + HARNESS_API_KEY):
 python main.py                    # interactive CLI
 python pipeline.py "<task>"       # autonomous multi-stage pipeline (see pipeline/)
 ```
 
-**Always run all nine test files after a change** and keep them passing.
+**Always run all ten test files after a change** and keep them passing.
 New core logic must be testable with fakes — if it can only be tested against a
 live API, it's in the wrong layer.
 
@@ -111,6 +112,9 @@ live API, it's in the wrong layer.
 - **Add a sub-agent role:** add an entry to `.harness/roles.json` (copy
   `roles.json.example`). No code needed (D17); the `delegate` tool picks up
   new roles the next time the CLI starts.
+- **Switch models at runtime:** `/model <name>` in the CLI rebuilds the
+  provider from a new model string and keeps conversation history (D21). No
+  code needed to use it; `HARNESS_MODEL` still sets the starting model.
 
 ## Environment / platform notes
 

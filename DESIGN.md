@@ -384,6 +384,44 @@ entry points after every step of the move, not just at the end.
 in documentation/diagrams. Rejected because the user specifically asked for
 the actual folders to move, not just a relabeling in prose.
 
+### D21 — `/model` switches at runtime by rebuilding, not by branching the loop
+**Decision:** `interfaces/cli.py`'s `Session.switch_model(model)` builds a new
+`Config` (`dataclasses.replace(self.config, model=model)`) and a new
+`Provider` (`build_provider(new_config)`), then re-points the *existing*
+`Conversation`'s summarizer at the new provider and rebuilds the
+`Orchestrator` around that same conversation object. The `/model` command
+(`_handle_model_command`) is a thin wrapper: no args shows the current model,
+one arg switches.
+**Why rebuild instead of mutate:** `Provider`, `Config`, and `Orchestrator`
+are all meant to be treated as immutable-for-the-session values elsewhere in
+the codebase (D2, D9) — teaching them to swap their own model out from under
+running code would mean every consumer suddenly has to worry about the
+model changing mid-call. Building fresh instances and swapping the
+*reference* on `Session` keeps that invariant intact; nothing outside
+`Session` needs to know switching is possible.
+**Why the conversation object survives untouched:** the whole point of a
+`/model` command during a live demo or a long task is to change *how* the
+work continues, not to throw away *what's* been done. `Conversation` doesn't
+hold a reference to the provider except through its injected `summarizer`
+callable (D11), so swapping that one field is enough — messages and the
+running summary carry over exactly as they were.
+**Failure handling:** `build_provider` is called against the *candidate*
+config before anything on `Session` is mutated, so an unknown model prefix
+(or any other setup failure) leaves the session exactly as it was — matching
+PRINCIPLES rule 5 ("fail loud at the edges"): the command reports the error
+and the session keeps working on the model it already had.
+**Trade-off:** switching models mid-conversation can produce a stranger reply
+than starting fresh — the new model didn't generate any of the history it's
+now continuing, tool-calling conventions can differ across models, and a
+provider swap doesn't re-validate that the new model actually supports every
+tool already in play. Accepted: it's an explicit, visible action the user
+takes (unlike e.g. auto-compaction), and being able to demonstrate "same
+task, different model" live is the actual point of the feature.
+**Out of scope for this decision:** per-role or per-sub-agent model
+overrides (`delegate` sub-agents keep using whatever `Provider` the
+coordinator was built with at startup, not whatever `/model` last switched
+to) — no current use case forces that yet.
+
 ---
 
 ## Known limitations & future work

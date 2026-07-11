@@ -65,7 +65,7 @@ happens only in `interfaces/` via `providers/factory.py`.
 | `observability/usage.py` | `UsageTracker`, `cost_for` | Accumulate tokens; estimate spend |
 | `observability/log.py` | `EventLogger` | Append a JSONL trace of events |
 | `context_engine/memory_tracker.py` | `MemoryTracker` | Automatic "what am I working on" summary, independent of `context_engine/memory_tool.py` (D16) |
-| `interfaces/cli.py` | `main`, `Session` | Terminal I/O, approvals, session commands, MCP wiring |
+| `interfaces/cli.py` | `main`, `Session` | Terminal I/O, approvals, session commands, MCP wiring, `/model` switching (D21) |
 | `pipeline/runner.py` | `PipelineRunner` | Outer multi-stage loop: implement → self-review → verify → test → sync-docs (D15) |
 | `pipeline/worktree.py` | worktree/commit helpers | Isolated git worktree per slice; the stuck-detection signal |
 | `pipeline/state.py` | `SliceState`, `ProgressLog` | Persist slice status + an append-only progress trail |
@@ -251,6 +251,18 @@ loop itself, only a calling pattern around it (D15). Because no human is
 present to answer an "ask" permission decision during an autonomous run, the
 pipeline's approver always denies rather than always allows; run with
 `HARNESS_PERMISSION_MODE=allowlist` or `auto` for it to make progress.
+
+## Runtime model switching (`/model`)
+
+`Session.switch_model(model)` (`interfaces/cli.py`) rebuilds the provider from
+a new model string without losing the conversation: it builds a fresh `Config`
+(`dataclasses.replace`, only `model` differs) and a fresh `Provider` via
+`build_provider`, points the *existing* `Conversation`'s summarizer at the new
+provider, and rebuilds the `Orchestrator` around the same conversation object.
+If `build_provider` rejects the new model string, nothing is mutated — the
+session keeps its old provider/config/agent untouched (D21). No new
+abstraction: this is the same `build_provider(config)` call `main()` already
+makes once at startup, just callable again mid-session.
 
 ## Extension points (where new work goes)
 
