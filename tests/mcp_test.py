@@ -12,8 +12,8 @@ from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tools.mcp_client import MCPManager, load_server_configs
-from tools.registry import Registry
+from engine.mcp_client import MCPManager, load_server_configs
+from engine.registry import Registry
 
 
 def _fake_tool(name, description="", input_schema=None, annotations=None):

@@ -1,7 +1,8 @@
-"""Tests for tools/offload.py, and that read_file/run_command/fetch_url/
-memory-view actually use it instead of the old hard-truncate. No key, no
-network -- fetch_url isn't exercised here (needs a real request); its use
-of maybe_offload is identical in shape to read_file's, which is covered.
+"""Tests for engine/builtin/offload.py, and that read_file/run_command/
+fetch_url/memory-view actually use it instead of the old hard-truncate. No
+key, no network -- fetch_url isn't exercised here (needs a real request);
+its use of maybe_offload is identical in shape to read_file's, which is
+covered.
 """
 
 import os
@@ -10,10 +11,10 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import tools.filesystem as filesystem
-import tools.memory as memory
-import tools.offload as offload
-import tools.shell as shell
+import context_engine.memory_tool as memory
+import engine.builtin.filesystem as filesystem
+import engine.builtin.offload as offload
+import engine.builtin.shell as shell
 
 
 def test_small_output_stays_inline_and_writes_nothing():

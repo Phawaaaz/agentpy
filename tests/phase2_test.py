@@ -10,14 +10,14 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import Config
-from core.context import Conversation
-from core.orchestrator import Orchestrator
+from context_engine.compaction import Conversation
+from context_engine.session_store import SessionStore
+from engine.orchestrator import Orchestrator
+from engine.registry import registry
 from observability.usage import UsageTracker, cost_for
 from providers.base import Provider, Response, Usage
-from store.session_store import SessionStore
-from tools.registry import registry
 
-import tools.filesystem  # noqa: F401
+import engine.builtin.filesystem  # noqa: F401
 
 
 class FakeProvider(Provider):

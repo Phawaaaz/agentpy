@@ -8,11 +8,11 @@ permission check before executing.
 from typing import Callable
 
 from config import Config
-from core import permissions
-from core.context import Conversation
+from context_engine.compaction import Conversation
+from engine import permissions
+from engine.registry import Registry, Tool
 from observability.usage import UsageTracker
 from providers.base import Provider, ToolCall
-from tools.registry import Registry, Tool
 
 # Called when a tool needs human approval. Returns True to allow, False to deny.
 Approver = Callable[[ToolCall, Tool], bool]

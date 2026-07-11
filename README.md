@@ -16,11 +16,10 @@ minimal and grow into a company-wide coding + automation assistant.
 
 ```
 interfaces/     thin entry points (CLI, pipeline CLI now; Slack / API later)
-core/           orchestrator (the loop) + permissions + context (compaction)
-tools/          registry + the tools (filesystem, shell, fetch_url, MCP client, ...)
+engine/         orchestrator (the loop) + permissions + registry + MCP client + built-in tools (engine/builtin/)
+context_engine/ conversation compaction + memory tool + activity tracker + session persistence
 providers/      model abstraction (anthropic + openai SDKs => any model)
 pipeline/       optional outer loop: multi-stage autonomous runs
-store/          session persistence (save/resume conversations)
 observability/  token usage + cost estimate + event logging
 config.py       model, key, permission mode, limits
 ```

@@ -14,8 +14,8 @@ path-traversal protection a text-editor tool needs for untrusted model input.
 
 import os
 
-from .offload import maybe_offload
-from .registry import Tool, registry
+from engine.builtin.offload import maybe_offload
+from engine.registry import Tool, registry
 
 _MAX_OUTPUT = 20_000
 _ROOT = ".harness/memory"

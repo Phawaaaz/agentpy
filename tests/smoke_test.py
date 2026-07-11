@@ -16,12 +16,12 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import Config
-from core.orchestrator import Orchestrator
+from engine.orchestrator import Orchestrator
+from engine.registry import registry
 from providers.base import Provider, Response, ToolCall
-from tools.registry import registry
 
-import tools.filesystem  # noqa: F401  (registers tools)
-import tools.shell  # noqa: F401
+import engine.builtin.filesystem  # noqa: F401  (registers tools)
+import engine.builtin.shell  # noqa: F401
 
 
 class FakeProvider(Provider):

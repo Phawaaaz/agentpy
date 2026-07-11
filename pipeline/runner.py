@@ -1,6 +1,6 @@
 """PipelineRunner: the outer, multi-stage autonomous loop.
 
-Composes the existing, unmodified core.orchestrator.Orchestrator -- each
+Composes the existing, unmodified engine.orchestrator.Orchestrator -- each
 stage/iteration is one fresh, bounded Orchestrator.run() call. This file adds
 no new capability to the base loop; it calls it repeatedly with safety rails
 around the calling pattern (stuck detection, iteration caps, a wall-clock
@@ -19,13 +19,13 @@ import uuid
 from dataclasses import dataclass
 
 from config import Config
-from core.context import Conversation, make_provider_summarizer
-from core.orchestrator import Orchestrator
+from context_engine.compaction import Conversation, make_provider_summarizer
+from engine.orchestrator import Orchestrator
+from engine.registry import Registry
 from pipeline import stages, worktree
 from pipeline.config import PipelineConfig
 from pipeline.state import ProgressLog, SliceState
 from providers.base import Provider
-from tools.registry import Registry
 
 _COMPLETE_RE = re.compile(r"<promise>\s*complete\s*</promise>", re.IGNORECASE)
 _ABORT_RE = re.compile(r"<promise>\s*abort\s*</promise>", re.IGNORECASE)

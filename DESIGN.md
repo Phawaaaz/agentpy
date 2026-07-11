@@ -23,7 +23,7 @@ deviations from our own [PRINCIPLES.md](PRINCIPLES.md) when we make them.
 ## Decisions
 
 ### D1 — A single fixed agent loop
-**Decision:** one loop in `core/orchestrator.py`: call model → run any requested
+**Decision:** one loop in `engine/orchestrator.py`: call model → run any requested
 tools → feed results back → repeat until no tool calls.
 **Why:** every agent behavior (coding, research, automation) reduces to this
 loop. Keeping it fixed and small means the interesting variability lives in
@@ -61,7 +61,7 @@ from the initial plan (per PRINCIPLES rule 0: write down why).
 **Decision:** the whole system stores history in OpenAI-style messages; providers
 translate to/from their native shape at their boundary.
 **Why:** the loop must not branch on provider. Picking one internal format and
-pushing translation into providers keeps `core/` provider-agnostic. OpenAI's
+pushing translation into providers keeps `engine/` provider-agnostic. OpenAI's
 format was chosen because it's the most widely mirrored, so most adapters are
 pass-throughs.
 **Trade-off:** the Anthropic adapter carries real translation logic (system
@@ -99,7 +99,7 @@ functions.
 two functions, the simplicity wins; if it grows, promote to a small Protocol.
 
 ### D8 — A single shared `registry` singleton
-**Decision:** `tools/registry.py` exposes one module-level `registry`; tool
+**Decision:** `engine/registry.py` exposes one module-level `registry`; tool
 modules register onto it on import.
 **Why:** it makes adding a tool a one-liner with zero wiring, which is the whole
 point of Open/Closed here. This is the *one* global we allow.
@@ -116,7 +116,7 @@ the system take config as a parameter (testable, no hidden reads).
 **Trade-off:** no live reconfiguration mid-run. Not needed yet.
 
 ### D10 — Context is a `Conversation`, separate from the loop (Phase 2)
-**Decision:** move history out of the orchestrator into `core/context.py`. The
+**Decision:** move history out of the orchestrator into `context_engine/compaction.py`. The
 `Conversation` owns messages and compaction; the orchestrator just calls
 `add`/`to_list`/`maybe_compact`.
 **Why:** Single Responsibility — "manage the window" is a different job from "run
@@ -127,15 +127,16 @@ the loop." It also isolates the token heuristic and cut logic for testing.
 **Decision:** when history exceeds `max_context_tokens`, fold the oldest messages
 into a running summary produced by an *injected* `Summarizer`. The cut slides
 past leading `tool` messages so a tool result is never orphaned from its call.
-**Why:** Dependency Inversion keeps `context.py` free of any provider import and
-testable with a fake summarizer (see `tests/phase2_test.py`). The summary lives
+**Why:** Dependency Inversion keeps `context_engine/compaction.py` free of any
+provider import and testable with a fake summarizer (see `tests/phase2_test.py`).
+The summary lives
 in the system prompt, which sidesteps role/pairing issues entirely.
 **Alternatives:** naive truncation (loses information) or no compaction (window
 overflows). Summarization keeps the thread coherent.
 **Trade-off:** compaction costs an extra model call. Acceptable and infrequent.
 
 ### D12 — Persistence as a swappable `SessionStore` (Phase 2)
-**Decision:** `store/session_store.py` serializes a `Conversation.snapshot()` to
+**Decision:** `context_engine/session_store.py` serializes a `Conversation.snapshot()` to
 JSON on disk and restores it. The CLI auto-saves after each turn.
 **Why:** resumable sessions are essential for a real tool, and one narrow
 interface (`save`/`load`/`list_ids`) means we can later back it with a database
@@ -153,7 +154,7 @@ model (unknown models report zero and say so). Accepted — it's guidance, not
 billing, and the table is trivial to update.
 
 ### D14 — MCP tools are managed by a stateful `MCPManager`, not self-registered
-**Decision:** `tools/mcp_client.py`'s `MCPManager` owns live connections to
+**Decision:** `engine/mcp_client.py`'s `MCPManager` owns live connections to
 external MCP servers (subprocess or network) and registers/deregisters their
 tools onto the shared `registry` as servers connect/disconnect, instead of
 the usual "tool module imports itself onto the registry" pattern (D8).
@@ -179,7 +180,7 @@ plain `Tool` objects the rest of the system treats identically.
 ### D15 — The autonomous pipeline is a new package that composes the loop, not a change to it
 **Decision:** `pipeline/` implements a higher-level, multi-stage loop
 (implement → self-review → verify → test → sync-docs) by calling
-`core.orchestrator.Orchestrator.run()` repeatedly — once per stage/iteration,
+`engine.orchestrator.Orchestrator.run()` repeatedly — once per stage/iteration,
 each a fresh, bounded, ordinary run of the *unmodified* orchestrator.
 **Why:** per D1, the base loop stays fixed and small. The pipeline's
 additional structure (stuck detection, iteration caps, a wall-clock timeout,
@@ -188,7 +189,7 @@ company-wide agent doesn't always want — it belongs in an optional layer
 above the loop, not folded into it. Giving each stage a *fresh* `Conversation`
 seeded from an append-only `progress.log` and the current `git diff --stat`
 (rather than one long conversation carried across stages) means no stage's
-context can grow unbounded, and `core/context.py`'s compaction stays
+context can grow unbounded, and `context_engine/compaction.py`'s compaction stays
 irrelevant to the pipeline entirely.
 **Stuck/timeout mechanism:** after each implement iteration, `git status
 --porcelain` in the isolated worktree is the progress signal — no change for
@@ -210,14 +211,14 @@ anywhere, which is called out at pipeline startup.
 ### D16 — Memory is two independent pieces, not one feature
 **Decision:** "memory" is deliberately split into two components that don't
 know about each other:
-- `tools/memory.py` — a plain neutral `Tool` (view/create/str_replace/
+- `context_engine/memory_tool.py` — a plain neutral `Tool` (view/create/str_replace/
   insert/delete/rename over a confined directory) the *model* calls
-  deliberately, exactly like `tools/filesystem.py`.
-- `observability/memory_tracker.py`'s `MemoryTracker` — an automatic,
+  deliberately, exactly like `engine/builtin/filesystem.py`.
+- `context_engine/memory_tracker.py`'s `MemoryTracker` — an automatic,
   harness-side listener that derives a standing "current task / files
   touched / tool usage" summary from the same `on_event` stream
   `observability/log.py`'s `EventLogger` already listens to, with **no
-  import of `tools/memory.py`** and no dependency in the other direction.
+  import of `context_engine/memory_tool.py`** and no dependency in the other direction.
 **Why not Anthropic's native `memory_20250818` tool type:** that type has a
 fixed schema Claude expects natively — using it would mean the Anthropic
 provider special-cases one tool while every other provider (OpenAI-compatible
@@ -229,12 +230,12 @@ convention gets the proven interface without the lock-in.
 the tool is for content the *model* decides is worth keeping; the tracker is
 bookkeeping the *harness* keeps regardless of whether the model ever calls
 the tool. Fusing them would mean neither could be removed without touching
-the other. As built: delete `tools/memory.py` and `MemoryTracker` still
+the other. As built: delete `context_engine/memory_tool.py` and `MemoryTracker` still
 works (just without the model's own notes alongside it); delete
 `MemoryTracker` and the memory tool still works (the model can still take
 notes, there's just no automatic activity summary). Both default to writing
 into the same `config.memory_dir` purely by convention — `interfaces/cli.py`
-sets `tools.memory`'s root from `config.memory_dir` explicitly at startup
+sets `context_engine.memory_tool`'s root from `config.memory_dir` explicitly at startup
 (`set_memory_root`), rather than either module reaching for `Config` itself.
 **Shared listener contract:** `EventLogger.log` was changed from
 `(kind, **fields)` to `(kind, *details)` — the same shape as `MemoryTracker.log`
@@ -244,8 +245,8 @@ treat any number of listeners interchangeably. Adding or removing a listener
 is a one-line change in `main()`, never a signature change.
 **Trade-off:** two files instead of one; a human has to know both exist to
 get the full picture. Accepted — independent removability is worth more than
-the small discovery cost, and both are cheap to find from `tools/` and
-`observability/`'s existing per-concern layout.
+the small discovery cost, and both are cheap to find from `context_engine/`'s
+existing per-concern layout.
 
 ### D17 — Multi-agent is delegation-as-a-tool, not a second control flow
 **Decision:** `multiagent/coordinator.py`'s `build_delegate_tool` produces one
@@ -257,20 +258,20 @@ call, not a new kind of control flow.
 **Why this reverses D1's "not a multi-agent framework":** it doesn't, quite —
 D1's point was that the *base loop* stays one-agent-one-loop, and every
 extension composes it from outside rather than complicating it. Delegation
-follows that rule exactly: `core/orchestrator.py` is untouched, and "an agent
+follows that rule exactly: `engine/orchestrator.py` is untouched, and "an agent
 that can spawn other agents" falls out of "a tool that happens to run another
 `Orchestrator`," the same pattern `pipeline/runner.py` already established
 for stages. What's genuinely new is the *policy* decision to allow it at all
 — recorded here rather than silently reversing D1.
 **Roles are external config**, loaded from `.harness/roles.json` (`load_roles`
-in `multiagent/roles.py`), same pattern as `tools/mcp_client.py`'s server
+in `multiagent/roles.py`), same pattern as `engine/mcp_client.py`'s server
 list — adding a sub-agent role is a data change, not a Python change. No
 roles configured (the default) means no `delegate` tool is registered at
 all — multi-agent is opt-in, same as MCP.
 **Shared memory is not new plumbing.** A sub-agent's `Config` is the
 coordinator's own config with only `system_prompt` swapped (`dataclasses.
 replace`) — `memory_dir`, `permission_mode`, and `model` all carry over
-unchanged, and `tools/memory.py`'s root is process-global (set once at
+unchanged, and `context_engine/memory_tool.py`'s root is process-global (set once at
 startup). Two agents sharing memory is simply two `Orchestrator`s pointed at
 the same directory; nothing had to be built for it.
 **One level of delegation, structurally, not by convention.** A sub-agent
@@ -302,7 +303,7 @@ into the same `skills` dict that holds the four built-ins
 through to `_handle_command`/`_handle_skill_command` — neither function
 knows or cares whether a given skill came from Python or from JSON, both
 are just `(task, diff_stat) -> str` callables.
-**Why this is the third occurrence of the same shape:** `tools/mcp_client.py`
+**Why this is the third occurrence of the same shape:** `engine/mcp_client.py`
 (external servers), `multiagent/roles.py` (external roles), and now this —
 all three are "a directory of names -> small config objects, loaded from a
 JSON file at startup, absent file means the feature is simply not there."
@@ -320,13 +321,13 @@ to lose the pipeline's real verify prompt; `main()` prints a one-line notice
 when this happens rather than either refusing to start or staying silent.
 
 ### D19 — Offload oversized tool output instead of truncating it away
-**Decision:** `tools/offload.py`'s `maybe_offload(text, max_inline, label)` is
+**Decision:** `engine/builtin/offload.py`'s `maybe_offload(text, max_inline, label)` is
 the one place every tool's "this output might be huge" logic goes through.
 Under the limit, text passes through unchanged. Over it, the full text is
 written to a content-hashed file under `config.offload_dir`
 (`.harness/offload/`, default) and the tool returns a preview plus the file
-path instead. `tools/filesystem.py` (`read_file`), `tools/shell.py`
-(`run_command`), `tools/web.py` (`fetch_url`), and `tools/memory.py`
+path instead. `engine/builtin/filesystem.py` (`read_file`), `engine/builtin/shell.py`
+(`run_command`), `engine/builtin/web.py` (`fetch_url`), and `context_engine/memory_tool.py`
 (`_view`) all call it instead of each hand-rolling `text[:N] + "...
 [truncated]"`.
 **Why:** the old behavior didn't just shorten output, it **destroyed** the
@@ -349,6 +350,39 @@ different heuristics to drift apart over time.
 the whole thing already truncated in context). Accepted — for oversized
 output the model rarely needs to read every character of, the disk write is
 cheap and the alternative was silent, permanent data loss.
+
+### D20 — Split into `context_engine/` and `engine/` (folder reorganization)
+**Decision:** regroup the codebase by what each piece is *for*, not just move
+files around ad hoc. `context_engine/` holds everything the agent persists or
+remembers — `compaction.py` (was `core/context.py`), `memory_tool.py` (was
+`tools/memory.py`), `memory_tracker.py` (was `observability/memory_tracker.py`),
+`session_store.py` (was `store/session_store.py`). `engine/` holds the
+execution machinery — `orchestrator.py` and `permissions.py` (was `core/`),
+`registry.py` and `mcp_client.py` (was `tools/`), and the built-in tools
+themselves under `engine/builtin/` (`filesystem.py`, `shell.py`, `web.py`,
+`offload.py`, was `tools/`). The old `core/`, `tools/`, and `store/` packages
+no longer exist; `observability/` keeps only what's actually cross-cutting
+telemetry (`usage.py`, `log.py`).
+**Why:** the previous layout grouped by "what kind of Python object is this"
+(a package for the loop, a package for tools, a package for persistence) more
+than by "what job is this doing for the agent." `context_engine/` makes the
+memory system's two independently-removable pieces (D16) sit next to the
+conversation history and session store they're conceptually part of, instead
+of being split across `tools/`, `observability/`, and `store/`. `engine/`
+makes "the loop and everything it acts through" one importable unit,
+`engine.builtin` making explicit that the shipped tools are a replaceable
+default set, not privileged over an MCP tool or a future company-specific one.
+**Trade-off:** this is a **purely organizational change — zero behavior
+difference.** No test assertion changed, no runtime logic changed; every edit
+is an import path. It touches nearly every file in the repository (`git mv`
+plus import fixes across `multiagent/`, `pipeline/`, both `interfaces/`
+entry points, and all nine test files), which is real regression risk for no
+functional payoff — done at explicit user request rather than because the
+old layout was broken. Verified by running the full test suite and both CLI
+entry points after every step of the move, not just at the end.
+**Alternatives considered:** leaving the folders as-is and only reorganizing
+in documentation/diagrams. Rejected because the user specifically asked for
+the actual folders to move, not just a relabeling in prose.
 
 ---
 
@@ -377,7 +411,7 @@ cheap and the alternative was silent, permanent data loss.
   sub-agent's `tool_call`/`thinking` events flow through the same `on_event`
   as the coordinator's own, unlabeled — you can tell something is happening,
   not which agent is doing it. Adding a "who" tag to the event shape would
-  fix this without touching `core/orchestrator.py` (D17); not done yet.
+  fix this without touching `engine/orchestrator.py` (D17); not done yet.
 
 Every item above has a home in the existing structure — none requires reshaping
 the loop.

@@ -11,7 +11,7 @@ autonomously in a sandbox or ask-first for a whole company, with no code change:
 decides how to obtain the human answer when the result is "ask".
 """
 
-from tools.registry import Tool
+from engine.registry import Tool
 
 ALLOW = "allow"
 ASK = "ask"

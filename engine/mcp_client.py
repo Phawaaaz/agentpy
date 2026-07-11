@@ -24,7 +24,7 @@ from mcp.client.sse import sse_client
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.client.streamable_http import streamable_http_client
 
-from tools.registry import Registry, Tool
+from engine.registry import Registry, Tool
 
 _MAX_OUTPUT = 20_000
 _CONNECT_TIMEOUT = 30

@@ -2,34 +2,34 @@
 
 Deliberately thin: it captures input, shows what the agent is doing, handles
 approval prompts, persists sessions, reports cost, and prints the final answer.
-All agent logic lives in core/. Slash commands (/new, /save, ...) manage the
+All agent logic lives in engine/. Slash commands (/new, /save, ...) manage the
 session; anything else is a task for the agent.
 """
 
 from datetime import datetime
 
 from config import Config
-from core.context import Conversation, make_provider_summarizer
-from core.orchestrator import Orchestrator
+from context_engine.compaction import Conversation, make_provider_summarizer
+from context_engine.memory_tracker import MemoryTracker
+from context_engine.session_store import SessionStore
+from engine.mcp_client import MCPManager, load_server_configs
+from engine.orchestrator import Orchestrator
+from engine.registry import Tool, registry
 from multiagent.coordinator import build_delegate_tool
 from multiagent.roles import load_roles
 from observability.log import EventLogger
-from observability.memory_tracker import MemoryTracker
 from observability.usage import UsageTracker
 from pipeline import stages, worktree
 from pipeline.external_skills import load_external_skills
 from providers.base import ToolCall
 from providers.factory import build_provider
-from store.session_store import SessionStore
-from tools.mcp_client import MCPManager, load_server_configs
-from tools.registry import Tool, registry
 
 # Importing these modules registers their tools onto the shared registry.
-import tools.filesystem  # noqa: F401
-import tools.memory  # noqa: F401
-import tools.offload
-import tools.shell  # noqa: F401
-import tools.web  # noqa: F401
+import context_engine.memory_tool  # noqa: F401
+import engine.builtin.filesystem  # noqa: F401
+import engine.builtin.offload
+import engine.builtin.shell  # noqa: F401
+import engine.builtin.web  # noqa: F401
 
 HELP = """commands:
   /new                 start a fresh conversation
@@ -301,8 +301,8 @@ def main() -> None:
     # nothing else in this file (or in either listener) needs to change.
     logger = EventLogger(config.logs_dir, run_id)
     memory_tracker = MemoryTracker(config.memory_dir, run_id)
-    tools.memory.set_memory_root(config.memory_dir)
-    tools.offload.set_offload_root(config.offload_dir)
+    context_engine.memory_tool.set_memory_root(config.memory_dir)
+    engine.builtin.offload.set_offload_root(config.offload_dir)
     on_event = _make_event_handler(logger, memory_tracker)
 
     # Skills are opt-in too: no .harness/skills.json means just the four

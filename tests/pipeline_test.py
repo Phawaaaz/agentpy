@@ -11,11 +11,11 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import Config
+from engine.registry import Registry, Tool
 from pipeline.config import PipelineConfig
 from pipeline.runner import PipelineRunner
 from providers.base import Provider, Response, ToolCall
-from tools.registry import Registry, Tool
-import tools.filesystem as filesystem
+import engine.builtin.filesystem as filesystem
 
 
 class FakeProvider(Provider):

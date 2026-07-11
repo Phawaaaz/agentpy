@@ -2,7 +2,7 @@
 
 Delegation is a *tool call*, not new control flow -- from the coordinator's
 own loop, calling `delegate` looks exactly like calling `run_command`.
-core/orchestrator.py is untouched; this composes it from the outside, same
+engine/orchestrator.py is untouched; this composes it from the outside, same
 as pipeline/runner.py does for stages.
 
 Sub-agents share the coordinator's Registry (via FilteredRegistry, so newly
@@ -18,11 +18,11 @@ counter has to catch.
 from dataclasses import replace
 
 from config import Config
-from core.context import Conversation, make_provider_summarizer
-from core.orchestrator import Approver, EventHook, Orchestrator
+from context_engine.compaction import Conversation, make_provider_summarizer
+from engine.orchestrator import Approver, EventHook, Orchestrator
+from engine.registry import Registry, Tool
 from multiagent.roles import AgentRole
 from providers.base import Provider
-from tools.registry import Registry, Tool
 
 
 class FilteredRegistry(Registry):

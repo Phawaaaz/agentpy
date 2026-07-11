@@ -5,8 +5,8 @@ Importing this module registers the tools onto the shared registry.
 
 import os
 
+from ..registry import Tool, registry
 from .offload import maybe_offload
-from .registry import Tool, registry
 
 _MAX_OUTPUT = 20_000  # keep tool output from blowing up the context window
 

@@ -8,8 +8,8 @@ plain text so the model gets readable content instead of markup. Marked
 import re
 import urllib.request
 
+from ..registry import Tool, registry
 from .offload import maybe_offload
-from .registry import Tool, registry
 
 _MAX_OUTPUT = 20_000
 _USER_AGENT = "agentic-harness/0.1 (+https://localhost)"

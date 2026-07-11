@@ -15,8 +15,8 @@ assistant.
 
 **The agent loop is fixed; capability grows at the edges.**
 
-You should almost never edit `core/orchestrator.py`. New power is added as:
-- a new **tool** (`tools/`),
+You should almost never edit `engine/orchestrator.py`. New power is added as:
+- a new **tool** (`engine/builtin/`),
 - a new model **provider** (`providers/`),
 - a new **interface** (`interfaces/`).
 
@@ -36,13 +36,12 @@ If a change forces you to edit the loop, stop — the design has drifted. Re-rea
 
 ```
 interfaces/     thin entry points (CLI, pipeline CLI now; Slack / API later)
-core/           orchestrator (the loop) + permissions + context (compaction)
-tools/          registry + dispatcher + the tools (filesystem, shell, fetch_url, MCP client, memory)
+engine/         orchestrator (the loop) + permissions + registry + MCP client + built-in tools (engine/builtin/)
+context_engine/ everything persisted/remembered: compaction, memory tool, activity tracker, session store (D20)
 providers/      Provider interface + per-model adapters (Anthropic, OpenAI-compatible)
-pipeline/       optional outer loop: multi-stage autonomous runs, composes core/ (D15)
-multiagent/     optional outer layer: delegate-to-sub-agent tool, composes core/ (D17)
-store/          session persistence (save/resume conversations as JSON)
-observability/  token usage + cost estimate + JSONL event logging + activity tracking (D16)
+pipeline/       optional outer loop: multi-stage autonomous runs, composes engine/ (D15)
+multiagent/     optional outer layer: delegate-to-sub-agent tool, composes engine/ (D17)
+observability/  token usage + cost estimate + JSONL event logging (D16)
 config.py       settings resolved once from env/.env, injected at the edge
 tests/          smoke/phase2/mcp/pipeline/memory/cli_skills/external_skills/multiagent/offload_test.py — all fakes, no key
 ```
@@ -53,7 +52,7 @@ tests/          smoke/phase2/mcp/pipeline/memory/cli_skills/external_skills/mult
    loop.** A tool failure is an observation the model reacts to, not a crash.
 2. **One neutral message format** (OpenAI-style) everywhere except inside a
    provider. Providers translate neutral ↔ native at their own boundary.
-3. **Inner layers never import outer layers.** `core/` must not import
+3. **Inner layers never import outer layers.** `engine/` must not import
    `interfaces/`; nothing imports a concrete provider except `providers/factory.py`.
 4. **Inject dependencies through constructors/parameters.** The only allowed
    global is the shared `registry` singleton (see DESIGN.md D8). Add no new globals.
@@ -104,7 +103,7 @@ live API, it's in the wrong layer.
   its tools register dynamically (D14).
 - **Add a pipeline stage:** add a prompt builder to `pipeline/stages.py` and
   call it from `pipeline/runner.py`'s stage sequence. The base loop
-  (`core/orchestrator.py`) is untouched either way.
+  (`engine/orchestrator.py`) is untouched either way.
 - **Add a skill:** no code needed — add an entry to `.harness/skills.json`
   (copy `skills.json.example`). Only touch `pipeline/stages.py` +
   `interfaces/cli.py`'s `_SKILLS` dict for a *built-in* skill shipped with

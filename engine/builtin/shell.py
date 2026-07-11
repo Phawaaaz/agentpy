@@ -5,8 +5,8 @@ Marked "dangerous" so the permission layer gates it in every mode except `auto`.
 
 import subprocess
 
+from ..registry import Tool, registry
 from .offload import maybe_offload
-from .registry import Tool, registry
 
 _MAX_OUTPUT = 20_000
 
