@@ -489,6 +489,77 @@ rejected because it doesn't give the harness its own login step or work
 identically across machines; a database-backed user store — rejected as
 premature for the account volumes a CLI tool has (same reasoning as D12).
 
+### D23 — Explicit planning as a tool (`todo_write`/`todo_read`), not a loop change
+**Decision:** `engine/builtin/planning.py` registers two tools,
+`todo_write(steps)` (replaces the whole ordered checklist -- each item a
+`{step, status}` pair, `status` one of `pending`/`in_progress`/`completed`)
+and `todo_read()` (renders it). State is a plain in-memory module list, reset
+via `reset_plan()` at the start of a new conversation (`Session.reset()`,
+and after `/load`, since the loaded conversation's plan -- if any -- wasn't
+persisted with it). This closes the "Planning and Decomposition" component
+from the LangChain harness-anatomy article that prompted D19's offloading
+work and this evening's gap review.
+**Why a tool instead of new orchestrator logic:** the system prompt already
+tells the model to "work in small, verifiable steps"; what was missing
+wasn't the *instruction* to plan, it was a place to put the plan somewhere
+visible and re-checkable turn over turn, the same way `memory` gives the
+model a place to put durable notes instead of only holding them in its own
+context. A tool keeps this at the edge (D1/AGENTS.md's one invariant) --
+`engine/orchestrator.py` doesn't know or care that `todo_write` exists,
+exactly like every other built-in tool.
+**Why replace-the-whole-plan instead of item-level mutation (`mark_step_done(i)`):**
+one call, one consistent state -- no risk of the model's mental model of
+step indices drifting from the stored list after a few turns of partial
+updates. The cost (resending the full checklist each time) is negligible;
+plans are short.
+**Trade-off -- not persisted, and shared across delegated sub-agents:**
+the plan lives only for the process's current conversation (gone on
+restart -- deliberate, `memory` already covers "needs to survive a
+restart"). More notably, because `todo_write`/`todo_read` self-register
+onto the same shared `registry` as everything else, a `delegate`-spawned
+sub-agent (D17) sees and can overwrite the *same* plan the coordinator is
+using -- `FilteredRegistry` only hides `delegate` itself, not this. Accepted
+for now as a known limitation (a real fix means threading a plan scope
+through `Orchestrator`, which is a bigger change than tonight's gap-closing
+pass justifies) rather than silently pretending it's isolated.
+
+### D24 — Web search is an opt-in tool gated on a real API key, not a scraper
+**Decision:** `engine/builtin/search.py`'s `build_search_tool(api_key)`
+returns a `web_search` tool backed by the Tavily API (`api.tavily.com`,
+built for LLM tool-calling, free tier) over plain `urllib` -- no new
+dependency, same as `fetch_url`. Unlike every other `engine/builtin/` tool,
+it does **not** self-register on import: `interfaces/cli.py` and
+`interfaces/pipeline_cli.py` only call `registry.register(build_search_tool(...))`
+when `config.search_api_key` (`HARNESS_SEARCH_API_KEY`) is set. No key = no
+tool, not a tool that's always present and always fails.
+**Why this reverses the earlier decision not to build web search:** the
+first pass (D19's PR) tried DuckDuckGo's free, keyless endpoints and found
+them unreliable in live testing (bot-detection challenge pages, empty
+Instant-Answer results for ordinary queries) -- not something to ship right
+before a demo. That verdict was about *scraping without a key*, not about
+search in general; a real search API with a real key is a different,
+reliable foundation, so the fix was never "write a better scraper," it was
+"use a service built for this."
+**Why opt-in registration instead of self-register + fail-string-on-call:**
+a tool the model can see in its tool list but that always returns
+`"Error: not configured"` teaches the model to distrust the tool list, and
+wastes a turn every time it's tried. This mirrors `delegate`'s shape (D17:
+no roles configured = no tool at all) rather than MCP's shape (D14: tools
+appear only once a server is actually connected) -- same underlying
+principle (don't advertise capability that isn't actually there), applied
+at config-load time instead of connect time since there's no "connect" step
+for an API-key-only tool.
+**Risk classification:** `dangerous`, same as `fetch_url` -- it reaches an
+external network service the user didn't explicitly name (unlike `fetch_url`,
+where the model at least names the exact URL). Prompts in `ask` mode, denied
+in `allowlist`, free in `auto` -- same rule, no special case added.
+**Trade-off:** requires the user to obtain and configure a third-party API
+key (a new external dependency the project didn't have before); the tool is
+silently absent without one rather than nudging the user toward getting a
+key. Accepted -- forcing configuration to get a real feature beats a
+default-on feature that's unreliable or requires committing to one specific
+provider's SDK.
+
 ---
 
 ## Known limitations & future work
@@ -509,8 +580,12 @@ premature for the account volumes a CLI tool has (same reasoning as D12).
   in order. Fine for correctness; a future optimization could parallelize
   independent, read-only calls.
 - **Coarse risk model:** see D5.
-- **No web *search* yet:** only `fetch_url` (needs a known URL). Search needs an
-  API key or scraping — deferred to Phase 3.
+- **Web search needs a Tavily key:** `web_search` (D24) is opt-in on
+  `HARNESS_SEARCH_API_KEY` and only supports one provider; no key means the
+  tool simply isn't there.
+- **The planning tool's state isn't sub-agent-scoped:** see D23's trade-off
+  — a `delegate`-spawned sub-agent shares the coordinator's `todo_write`/
+  `todo_read` state, since `FilteredRegistry` only hides `delegate` itself.
 - **Pipeline runs one slice at a time:** no parallel worktrees yet. Real
   parallelism needs separate OS processes (not just threads, since `_cwd`
   chdir is process-global) — a bigger step, left for a follow-up.

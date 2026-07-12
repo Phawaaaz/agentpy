@@ -64,6 +64,8 @@ see a `Config` with different paths in it — same as any other config value
 | `engine/registry.py` | `Tool`, `Registry`, `registry` | Hold tool schemas; dispatch by name |
 | `engine/builtin/filesystem.py` | read/write/edit/list | Filesystem tools (self-register) |
 | `engine/builtin/shell.py` | run_command | Shell tool (self-register) |
+| `engine/builtin/planning.py` | `todo_write`, `todo_read`, `reset_plan` | Explicit step-by-step plan as a tool (self-register) (D23) |
+| `engine/builtin/search.py` | `build_search_tool` | `web_search` via Tavily; opt-in on an API key, not self-registered (D24) |
 | `engine/mcp_client.py` | `MCPManager`, `MCPServerConfig` | Connect to MCP servers; register/deregister their tools (D14) |
 | `context_engine/memory_tool.py` | `memory`, `set_memory_root` | The model's own view/create/str_replace/insert/delete/rename tool (D16) |
 | `engine/builtin/offload.py` | `maybe_offload`, `set_offload_root` | Oversized tool output -> file + preview, instead of hard truncation (D19) |
@@ -288,6 +290,25 @@ data even though they share the same process's `registry`, MCP connections,
 and org-wide `.harness/*.json` config (D22). `HARNESS_USER`/`HARNESS_PASSWORD`
 skip the interactive prompt for scripted/demo runs.
 
+## Planning (`todo_write` / `todo_read`)
+
+`engine/builtin/planning.py` holds one ordered checklist in a module-level
+list -- `todo_write(steps)` replaces it wholesale, `todo_read()` renders it.
+No new orchestrator concept: it's a tool like any other, just one whose
+"state" is the plan itself rather than a side effect on disk. `Session.reset()`
+and a successful `/load` both call `reset_plan()` so a new or resumed
+conversation doesn't inherit a stale plan (D23).
+
+## Web search (`web_search`, opt-in)
+
+`engine/builtin/search.py`'s `build_search_tool(api_key)` wraps the Tavily
+API over plain `urllib` (no new dependency, same as `fetch_url`). It's the
+one `engine/builtin/` tool that does **not** self-register on import --
+`interfaces/cli.py` and `interfaces/pipeline_cli.py` each call
+`registry.register(build_search_tool(config.search_api_key))` only when
+`HARNESS_SEARCH_API_KEY` is set, so an unconfigured harness simply doesn't
+have the tool rather than having one that always errors (D24).
+
 ## Extension points (where new work goes)
 
 | To add… | Do this | Files touched |
@@ -324,10 +345,12 @@ Step-by-step recipes are in [CONTRIBUTING.md](CONTRIBUTING.md).
   agent memory (`context_engine/memory_tool.py` + `context_engine/memory_tracker.py`,
   D16), skill commands (`/review`/`/verify`/`/test`/`/docs`), multi-agent
   delegation (`multiagent/`, D17), runtime model switching (`/model`, D21),
-  multi-user login + per-user session isolation (`auth/`, D22). Still open:
-  HTTP API, Slack interface, web *search*, pipeline push/PR automation,
-  cross-model review, parallel slices, labeling sub-agent activity in the CLI
-  output, and account management beyond signup/verify (no password reset,
-  no roles/permissions per account yet).
+  multi-user login + per-user session isolation (`auth/`, D22), an explicit
+  planning tool (`todo_write`/`todo_read`, D23), opt-in web search (`web_search`
+  via Tavily, D24). Still open: HTTP API, Slack interface, sandboxed/isolated
+  execution, a browser tool, pipeline push/PR automation, cross-model review,
+  parallel slices, labeling sub-agent activity in the CLI output, and account
+  management beyond signup/verify (no password reset, no roles/permissions
+  per account yet).
 
 These phases slot into the existing folders without reshaping the loop.

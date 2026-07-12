@@ -131,6 +131,22 @@ answer, same as calling any other tool. Sub-agents share your `model`,
 sub-agent (or the coordinator) can read it back. `/roles` lists what's
 configured. No roles configured = no `delegate` tool = unchanged behavior.
 
+## Planning
+
+The agent has `todo_write`/`todo_read` tools to keep an explicit, visible
+step-by-step checklist for the current task instead of only holding a plan
+in its own reasoning — each step tracked as `pending`/`in_progress`/
+`completed`. No configuration needed; it resets on `/new` or `/load`.
+
+## Web search
+
+Set `HARNESS_SEARCH_API_KEY` to a [Tavily](https://tavily.com) API key (free
+tier available) to enable the `web_search` tool. Unlike the other built-in
+tools, it's opt-in: with no key set, the tool simply isn't registered,
+rather than being present and always failing. Use it for current
+information not in the model's training data; `fetch_url` is still what you
+want for a URL you already know.
+
 ## Large tool output
 
 Any tool result over ~20k characters (a big file, a noisy command, a large
@@ -202,6 +218,8 @@ python tests/multiagent_test.py     # delegate tool, FilteredRegistry, no recurs
 python tests/offload_test.py        # oversized output -> file + preview, not lost
 python tests/model_switch_test.py   # /model command, history preserved across a switch
 python tests/auth_test.py           # password hashing, UserStore, login flow, per-user dirs
+python tests/planning_test.py       # todo_write/todo_read checklist tool
+python tests/search_test.py         # web_search formatting, error handling, mocked urlopen
 ```
 
-All eleven run against fakes — no key, no network — and should print `... PASSED`.
+All thirteen run against fakes — no key, no network — and should print `... PASSED`.

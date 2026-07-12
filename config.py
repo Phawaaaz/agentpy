@@ -79,6 +79,8 @@ class Config:
     offload_dir: str = ".harness/offload"
     # Where user accounts (username + salted/hashed password) are stored.
     users_config_path: str = ".harness/users.json"
+    # Tavily API key for the web_search tool. Unset = no tool registered (D24).
+    search_api_key: str | None = None
 
     def for_user(self, username: str) -> "Config":
         """A copy of this Config with per-user data directories namespaced by
@@ -126,4 +128,5 @@ class Config:
             skills_config_path=os.getenv("HARNESS_SKILLS_CONFIG", cls.skills_config_path),
             offload_dir=os.getenv("HARNESS_OFFLOAD_DIR", cls.offload_dir),
             users_config_path=os.getenv("HARNESS_USERS_FILE", cls.users_config_path),
+            search_api_key=os.getenv("HARNESS_SEARCH_API_KEY") or None,
         )

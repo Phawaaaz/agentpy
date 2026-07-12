@@ -16,8 +16,10 @@ from providers.factory import build_provider
 # Importing these modules registers their tools onto the shared registry.
 import engine.builtin.filesystem  # noqa: F401
 import engine.builtin.offload
+import engine.builtin.planning  # noqa: F401
 import engine.builtin.shell  # noqa: F401
 import engine.builtin.web  # noqa: F401
+from engine.builtin.search import build_search_tool
 
 
 def _on_event(kind: str, *details) -> None:
@@ -61,6 +63,8 @@ def main() -> None:
             "for the pipeline to make real progress.\n"
         )
     engine.builtin.offload.set_offload_root(config.offload_dir)
+    if config.search_api_key:
+        registry.register(build_search_tool(config.search_api_key))
     provider = build_provider(config)
     runner = PipelineRunner(provider, registry, config, PipelineConfig.load(), on_event=_on_event)
 

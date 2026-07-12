@@ -44,7 +44,7 @@ multiagent/     optional outer layer: delegate-to-sub-agent tool, composes engin
 auth/           user accounts: salted/hashed passwords, per-user session isolation (D22)
 observability/  token usage + cost estimate + JSONL event logging (D16)
 config.py       settings resolved once from env/.env, injected at the edge
-tests/          smoke/phase2/mcp/pipeline/memory/cli_skills/external_skills/multiagent/offload/model_switch/auth_test.py — all fakes, no key
+tests/          smoke/phase2/mcp/pipeline/memory/cli_skills/external_skills/multiagent/offload/model_switch/auth/planning/search_test.py — all fakes, no key
 ```
 
 ## Hard rules (enforced, not suggestions)
@@ -83,13 +83,15 @@ python tests/multiagent_test.py   # prints: MULTIAGENT TESTS PASSED
 python tests/offload_test.py      # prints: OFFLOAD TESTS PASSED
 python tests/model_switch_test.py # prints: MODEL SWITCH TESTS PASSED
 python tests/auth_test.py         # prints: AUTH TESTS PASSED
+python tests/planning_test.py     # prints: PLANNING TESTS PASSED
+python tests/search_test.py       # prints: SEARCH TESTS PASSED
 
 # run for real (after: cp .env.example .env; set HARNESS_MODEL + HARNESS_API_KEY):
 python main.py                    # interactive CLI
 python pipeline.py "<task>"       # autonomous multi-stage pipeline (see pipeline/)
 ```
 
-**Always run all eleven test files after a change** and keep them passing.
+**Always run all thirteen test files after a change** and keep them passing.
 New core logic must be testable with fakes — if it can only be tested against a
 live API, it's in the wrong layer.
 
@@ -120,8 +122,16 @@ live API, it's in the wrong layer.
 - **Multi-user login:** the CLI prompts for a username/password at startup
   (`auth/users.py`'s `UserStore`, salted PBKDF2 hashes, no plaintext), and
   namespaces each user's sessions/memory/logs/offload dir by username
-  (`Config.for_user`, D22). `HARNESS_USER`/`HARNESS_PASSWORD` skip the
-  prompt for scripted use.
+  (`Config.for_user`, D22, with username confined to a safe charset so it
+  can't traverse out of `.harness/`). `HARNESS_USER`/`HARNESS_PASSWORD` skip
+  the prompt for scripted use.
+- **Give the agent an explicit plan:** `todo_write`/`todo_read`
+  (`engine/builtin/planning.py`, D23) let the model track a step-by-step
+  checklist visibly instead of only holding it in its own reasoning. No
+  config needed; self-registers like any other built-in tool.
+- **Enable web search:** set `HARNESS_SEARCH_API_KEY` (a free Tavily key) to
+  register the `web_search` tool (`engine/builtin/search.py`, D24). No key =
+  no tool, not a tool that always errors.
 
 ## Environment / platform notes
 

@@ -32,8 +32,10 @@ from providers.factory import OPENAI_COMPATIBLE, build_provider
 import context_engine.memory_tool  # noqa: F401
 import engine.builtin.filesystem  # noqa: F401
 import engine.builtin.offload
+import engine.builtin.planning
 import engine.builtin.shell  # noqa: F401
 import engine.builtin.web  # noqa: F401
+from engine.builtin.search import build_search_tool
 
 HELP = """commands:
   /new                 start a fresh conversation
@@ -158,6 +160,7 @@ class Session:
         self.id = datetime.now().strftime("%Y%m%d-%H%M%S")
         self.conversation = self._new_conversation()
         self.agent = self._new_agent()
+        engine.builtin.planning.reset_plan()
 
     def rebuild_agent(self) -> None:
         self.agent = self._new_agent()
@@ -296,6 +299,7 @@ def _handle_command(
         elif store.load(args[0], session.conversation):
             session.id = args[0]
             session.rebuild_agent()
+            engine.builtin.planning.reset_plan()
             print(f"loaded session: {args[0]}")
         else:
             print(f"no such session: {args[0]}")
@@ -416,6 +420,12 @@ def main() -> None:
                 provider, registry, config, roles, approver=_make_approver(), on_event=on_event
             )
         )
+
+    # Web search is opt-in too: no HARNESS_SEARCH_API_KEY means no
+    # `web_search` tool, rather than a tool that's always present but
+    # always errors (same shape as the `delegate` tool above).
+    if config.search_api_key:
+        registry.register(build_search_tool(config.search_api_key))
 
     session = Session(config, provider, on_event, username=username)
     store = SessionStore(config.sessions_dir)
