@@ -5,7 +5,15 @@ loaded once from environment variables (and a .env file if present).
 """
 
 import os
+import re
 from dataclasses import dataclass, replace
+
+# Usernames become directory path components (Config.for_user); confine them
+# to a safe charset so "../other_user" or "/tmp/evil" can't escape the
+# intended per-user directory (same whitelist-the-untrusted-component pattern
+# as context_engine/session_store.py's session_id and observability/log.py's
+# run_id).
+_VALID_USERNAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 try:
     from dotenv import load_dotenv
@@ -76,7 +84,16 @@ class Config:
         """A copy of this Config with per-user data directories namespaced by
         username, so concurrent users never see each other's sessions,
         memory, logs, or offloaded output. Org-wide config (model, MCP
-        servers, roles, skills) is untouched -- those aren't a user's data."""
+        servers, roles, skills) is untouched -- those aren't a user's data.
+
+        Rejects a username that isn't a safe directory-name component --
+        without this, "../alice" or "/tmp/evil" would let one user's
+        directories collide with another's or escape .harness/ entirely."""
+        if not _VALID_USERNAME.match(username):
+            raise ValueError(
+                f"invalid username {username!r}: must be 1-64 characters of "
+                "letters, digits, underscore, or hyphen"
+            )
         return replace(
             self,
             sessions_dir=os.path.join(self.sessions_dir, username),

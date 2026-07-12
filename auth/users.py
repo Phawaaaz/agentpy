@@ -8,9 +8,15 @@ per-user salt, stdlib only (`hashlib` + `secrets`), no extra dependency.
 import hashlib
 import json
 import os
+import re
 import secrets
 
 _ITERATIONS = 200_000
+
+# Usernames become directory path components elsewhere (Config.for_user), so
+# they're confined to a safe charset at the point they're first created --
+# "../alice" or "/tmp/evil" must never make it into the accounts file.
+_VALID_USERNAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
 def hash_password(password: str, salt: bytes | None = None) -> tuple[str, str]:
@@ -54,8 +60,13 @@ class UserStore:
         return username in self._load()
 
     def register(self, username: str, password: str) -> None:
-        if not username or not password:
-            raise ValueError("username and password must both be non-empty")
+        if not _VALID_USERNAME.match(username):
+            raise ValueError(
+                f"invalid username {username!r}: must be 1-64 characters of "
+                "letters, digits, underscore, or hyphen"
+            )
+        if not password:
+            raise ValueError("password must be non-empty")
         data = self._load()
         if username in data:
             raise ValueError(f"user '{username}' already exists")

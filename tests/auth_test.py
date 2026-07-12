@@ -64,6 +64,22 @@ def test_user_store_rejects_duplicate_and_empty():
         print("  UserStore rejects duplicate/empty accounts OK")
 
 
+def test_user_store_rejects_path_traversal_usernames():
+    with tempfile.TemporaryDirectory() as tmp:
+        store = UserStore(os.path.join(tmp, "users.json"))
+        for evil in ["../alice", "/tmp/evil", "a/b", "..", "user name", "u" * 65]:
+            try:
+                store.register(evil, "somepassword")
+                raised = False
+            except ValueError:
+                raised = True
+            assert raised, f"{evil!r} should be rejected as an unsafe username"
+        # a normal username still works
+        store.register("alice-2", "somepassword")
+        assert store.exists("alice-2")
+        print("  UserStore rejects path-traversal-shaped usernames OK")
+
+
 def test_password_never_stored_in_plaintext():
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "users.json")
@@ -96,6 +112,18 @@ def test_config_for_user_namespaces_only_per_user_dirs():
     # Original Config is untouched (for_user returns a copy).
     assert base.sessions_dir == ".harness/sessions"
     print("  Config.for_user namespaces only per-user dirs OK")
+
+
+def test_config_for_user_rejects_path_traversal_usernames():
+    base = Config(sessions_dir=".harness/sessions", memory_dir=".harness/memory")
+    for evil in ["../alice", "/tmp/evil", "a/b", ".."]:
+        try:
+            base.for_user(evil)
+            raised = False
+        except ValueError:
+            raised = True
+        assert raised, f"{evil!r} should be rejected -- it must not escape .harness/"
+    print("  Config.for_user rejects path-traversal-shaped usernames (defense in depth) OK")
 
 
 def test_login_env_var_shortcut_existing_user():
@@ -191,8 +219,10 @@ def main():
     test_hash_password_uses_a_random_salt_and_verifies()
     test_user_store_register_and_verify()
     test_user_store_rejects_duplicate_and_empty()
+    test_user_store_rejects_path_traversal_usernames()
     test_password_never_stored_in_plaintext()
     test_config_for_user_namespaces_only_per_user_dirs()
+    test_config_for_user_rejects_path_traversal_usernames()
     test_login_env_var_shortcut_existing_user()
     test_login_env_var_shortcut_registers_new_user()
     test_login_env_var_shortcut_wrong_password_exits()

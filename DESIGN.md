@@ -455,6 +455,23 @@ instead of every downstream consumer.
 stdlib `hashlib` needs none, matching this repo's existing bias toward native
 SDKs over extra packages (D3). 200,000 iterations is OWASP's current
 minimum-recommended floor for PBKDF2-SHA256.
+**Username validation closes a path-traversal hole:** the first version of
+`Config.for_user` built directories with a raw `os.path.join(self.sessions_dir,
+username)` — an unsanitized username, since `UserStore.register` only checked
+"non-empty." A username of `"../alice"` collides `os.path.join` back onto
+another user's real directory (`.harness/sessions/../sessions/alice` resolves
+to the same path the OS already uses for user `alice`), and a leading `/`
+discards the base directory entirely (`os.path.join` semantics), redirecting
+a user's own data anywhere on disk the process can write. Caught in a
+security review before merging (not in production). Fixed by confining
+usernames to `^[A-Za-z0-9_-]{1,64}$` in *two* places — `UserStore.register`
+(reject at account creation, the actual point untrusted input enters) and
+`Config.for_user` itself (defense in depth: the method's own docstring
+promises directory isolation, so it enforces the precondition rather than
+trusting every caller to have validated first) — the same
+"whitelist-the-untrusted-path-component" pattern already used by
+`context_engine/session_store.py`'s `session_id` and `observability/log.py`'s
+`run_id`; this feature should have followed it from the start.
 **Trade-off:** this is real authentication (salted, hashed, never
 plaintext) but not a real *security boundary* — anyone with filesystem
 access to `.harness/users.json` or the running process can read any user's
