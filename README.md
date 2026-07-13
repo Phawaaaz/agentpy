@@ -16,11 +16,11 @@ minimal and grow into a company-wide coding + automation assistant.
 
 ```
 interfaces/     thin entry points (CLI, pipeline CLI now; Slack / API later)
-core/           orchestrator (the loop) + permissions + context (compaction)
-tools/          registry + the tools (filesystem, shell, fetch_url, MCP client, ...)
+engine/         orchestrator (the loop) + permissions + registry + MCP client + built-in tools (engine/builtin/)
+context_engine/ conversation compaction + memory tool + activity tracker + session persistence
+auth/           user accounts: salted/hashed passwords, per-user session isolation
 providers/      model abstraction (anthropic + openai SDKs => any model)
 pipeline/       optional outer loop: multi-stage autonomous runs
-store/          session persistence (save/resume conversations)
 observability/  token usage + cost estimate + event logging
 config.py       model, key, permission mode, limits
 ```
@@ -48,11 +48,24 @@ HARNESS_API_KEY=sk-...
 Known prefixes: `anthropic/`, `openai/`, `openrouter/`, `groq/`, `together/`,
 `ollama/`. Any other OpenAI-compatible server works by setting `HARNESS_BASE_URL`.
 
+To switch models without restarting, use `/model <name>` inside a running
+session (e.g. `/model ollama/llama3.2:3b`) — it rebuilds the provider and
+keeps your conversation history.
+
 ## Run
 
 ```bash
 python main.py
 ```
+
+The CLI starts with a sign-in prompt: enter a username, and if it doesn't
+exist yet you'll be asked to choose a password and it's created on the spot
+(passwords are PBKDF2-hashed with a random per-user salt — see DESIGN.md
+D22 — never stored in plaintext, in `HARNESS_USERS_FILE`, default
+`.harness/users.json`). Each user's sessions, memory, logs, and offloaded
+tool output live under their own subdirectory, so concurrent users never see
+each other's data. For scripted or demo use, set `HARNESS_USER` +
+`HARNESS_PASSWORD` in `.env` to skip the interactive prompt.
 
 Then type a task, e.g. *"list the files here and tell me what this project is."*
 
@@ -118,6 +131,31 @@ answer, same as calling any other tool. Sub-agents share your `model`,
 sub-agent (or the coordinator) can read it back. `/roles` lists what's
 configured. No roles configured = no `delegate` tool = unchanged behavior.
 
+## Planning
+
+The agent has `todo_write`/`todo_read` tools to keep an explicit, visible
+step-by-step checklist for the current task instead of only holding a plan
+in its own reasoning — each step tracked as `pending`/`in_progress`/
+`completed`. No configuration needed; it resets on `/new` or `/load`.
+
+## Web search
+
+Set `HARNESS_SEARCH_API_KEY` to a [Tavily](https://tavily.com) API key (free
+tier available) to enable the `web_search` tool. Unlike the other built-in
+tools, it's opt-in: with no key set, the tool simply isn't registered,
+rather than being present and always failing. Use it for current
+information not in the model's training data; `fetch_url` is still what you
+want for a URL you already know.
+
+## Large tool output
+
+Any tool result over ~20k characters (a big file, a noisy command, a large
+page fetch) no longer gets hard-truncated and lost — the full output is
+written to a file under `HARNESS_OFFLOAD_DIR` (default `.harness/offload/`),
+and the tool returns a preview plus that path. The model can `read_file` the
+rest if it actually needs it. Applies to `read_file`, `run_command`,
+`fetch_url`, and the memory tool's `view`.
+
 ## Autonomous pipeline
 
 For a task you want worked end-to-end unattended:
@@ -147,6 +185,9 @@ Inside the CLI, lines starting with `/` are commands (everything else is a task)
 | `/sessions` | List saved sessions |
 | `/cost` | Show token usage + estimated cost |
 | `/memory` | Show what the harness has been working on |
+| `/model` | Show the current model |
+| `/model <name>` | Switch model mid-session, e.g. `/model ollama/llama3.2:3b` (conversation history kept) |
+| `/whoami` | Show the logged-in user |
 | `/review`, `/verify`, `/test`, `/docs` | Run a pipeline stage's prompt on demand (skills) |
 | `/roles` | List configured sub-agent roles (`delegate` target) |
 | `/help` | List commands |
@@ -174,6 +215,11 @@ python tests/memory_test.py   # memory tool CRUD/confinement, activity tracker
 python tests/cli_skills_test.py     # /review /verify /test /docs commands
 python tests/external_skills_test.py # skills.json loading + prompt substitution
 python tests/multiagent_test.py     # delegate tool, FilteredRegistry, no recursion
+python tests/offload_test.py        # oversized output -> file + preview, not lost
+python tests/model_switch_test.py   # /model command, history preserved across a switch
+python tests/auth_test.py           # password hashing, UserStore, login flow, per-user dirs
+python tests/planning_test.py       # todo_write/todo_read checklist tool
+python tests/search_test.py         # web_search formatting, error handling, mocked urlopen
 ```
 
-All eight run against fakes — no key, no network — and should print `... PASSED`.
+All thirteen run against fakes — no key, no network — and should print `... PASSED`.

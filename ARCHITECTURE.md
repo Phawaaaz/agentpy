@@ -14,54 +14,69 @@ is added as new tools, providers, and interfaces at the edges.**
 ## Layers
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│ interfaces/     CLI + pipeline CLI now; Slack / HTTP API later  │  ← talks to humans/systems
-├──────────────────────────────────────────────────────────────┤
-│ pipeline/       multi-stage autonomous loop (composes core/)   │  ← optional outer layer
-│ multiagent/     delegate-to-sub-agent tool (composes core/)    │  ← optional outer layer
-├──────────────────────────────────────────────────────────────┤
-│ core/           orchestrator (the loop) + permissions          │  ← policy / control flow
-├──────────────────────────────────────────────────────────────┤
-│ tools/          registry + dispatcher + the tools + MCP client │  ← the agent's hands
-├──────────────────────────────────────────────────────────────┤
-│ providers/      Provider interface + per-model adapters        │  ← the agent's mouth/ears
-└──────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│ interfaces/     CLI + pipeline CLI now; Slack / HTTP API later      │  ← talks to humans/systems
+├──────────────────────────────────────────────────────────────────┤
+│ pipeline/       multi-stage autonomous loop (composes engine/)      │  ← optional outer layer
+│ multiagent/     delegate-to-sub-agent tool (composes engine/)       │  ← optional outer layer
+├──────────────────────────────────────────────────────────────────┤
+│ engine/         orchestrator (the loop) + permissions + registry    │  ← policy / control flow
+│                 + MCP client + built-in tools (engine/builtin/)     │     + the agent's hands
+├──────────────────────────────────────────────────────────────────┤
+│ context_engine/ compaction + memory tool + activity tracker         │  ← what the agent remembers
+│                 + session store                                     │
+├──────────────────────────────────────────────────────────────────┤
+│ providers/      Provider interface + per-model adapters             │  ← the agent's mouth/ears
+└──────────────────────────────────────────────────────────────────┘
    config.py       settings resolved once, injected at the edge
-   store/          session persistence (save/resume conversations)   ┐ cross-cutting:
-   observability/  usage/cost tracking + event logging + activity   ┘ touch every layer
+   observability/  usage/cost tracking + event logging               ┐ cross-cutting:
+                                                                       ┘ touch every layer
 ```
 
-`pipeline/` and `multiagent/` both sit *above* `core/`, not inside it: each
+`pipeline/` and `multiagent/` both sit *above* `engine/`, not inside it: each
 calls `Orchestrator.run()` — repeatedly for a stage sequence, or once per
 delegated sub-task — instead of changing what the loop does. See D15 and
 D17 in [DESIGN.md](DESIGN.md).
 
-Dependencies point **downward and inward, toward abstractions**. `core/` depends
-on the `Provider` interface and the `Registry`, never on a concrete provider or
-an interface. Wiring happens only in `interfaces/` via `providers/factory.py`.
+Dependencies point **downward and inward, toward abstractions**. `engine/`
+depends on the `Provider` interface, the `Registry`, and `context_engine/`
+(for `Conversation`), never on a concrete provider or an interface. Wiring
+happens only in `interfaces/` via `providers/factory.py`.
+
+`auth/` isn't in the stack above because nothing below `interfaces/` needs
+to know accounts exist: `interfaces/cli.py` is the only caller of
+`auth/users.py`, and it uses `Config.for_user(username)` to turn "who's
+logged in" into ordinary `Config` fields (`sessions_dir`, `memory_dir`, ...)
+before anything else is constructed. `engine/` and `context_engine/` just
+see a `Config` with different paths in it — same as any other config value
+(D22).
 
 ## Component reference
 
 | File | Type(s) | Responsibility |
 |------|---------|----------------|
-| `config.py` | `Config` | Resolve settings from env/`.env` once |
+| `config.py` | `Config`, `Config.for_user` | Resolve settings from env/`.env` once; namespace per-user dirs (D22) |
+| `auth/users.py` | `UserStore`, `hash_password`, `verify_password` | Salted/hashed username+password accounts (D22) |
 | `providers/base.py` | `Provider`, `Response`, `ToolCall` | The model abstraction + normalized data |
 | `providers/anthropic_provider.py` | `AnthropicProvider` | Neutral ↔ Claude API translation |
 | `providers/openai_provider.py` | `OpenAIProvider` | OpenAI + any compatible endpoint |
 | `providers/factory.py` | `build_provider` | Model string → concrete provider |
-| `tools/registry.py` | `Tool`, `Registry`, `registry` | Hold tool schemas; dispatch by name |
-| `tools/filesystem.py` | read/write/edit/list | Filesystem tools (self-register) |
-| `tools/shell.py` | run_command | Shell tool (self-register) |
-| `tools/mcp_client.py` | `MCPManager`, `MCPServerConfig` | Connect to MCP servers; register/deregister their tools (D14) |
-| `tools/memory.py` | `memory`, `set_memory_root` | The model's own view/create/str_replace/insert/delete/rename tool (D16) |
-| `core/permissions.py` | `check` | allow / ask / deny decision |
-| `core/context.py` | `Conversation`, `make_provider_summarizer` | Hold history; compact it when over budget |
-| `core/orchestrator.py` | `Orchestrator` | The agent loop + tool gating |
-| `store/session_store.py` | `SessionStore` | Save/load a conversation as JSON |
+| `engine/registry.py` | `Tool`, `Registry`, `registry` | Hold tool schemas; dispatch by name |
+| `engine/builtin/filesystem.py` | read/write/edit/list | Filesystem tools (self-register) |
+| `engine/builtin/shell.py` | run_command | Shell tool (self-register) |
+| `engine/builtin/planning.py` | `todo_write`, `todo_read`, `reset_plan` | Explicit step-by-step plan as a tool (self-register) (D23) |
+| `engine/builtin/search.py` | `build_search_tool` | `web_search` via Tavily; opt-in on an API key, not self-registered (D24) |
+| `engine/mcp_client.py` | `MCPManager`, `MCPServerConfig` | Connect to MCP servers; register/deregister their tools (D14) |
+| `context_engine/memory_tool.py` | `memory`, `set_memory_root` | The model's own view/create/str_replace/insert/delete/rename tool (D16) |
+| `engine/builtin/offload.py` | `maybe_offload`, `set_offload_root` | Oversized tool output -> file + preview, instead of hard truncation (D19) |
+| `engine/permissions.py` | `check` | allow / ask / deny decision |
+| `context_engine/compaction.py` | `Conversation`, `make_provider_summarizer` | Hold history; compact it when over budget |
+| `engine/orchestrator.py` | `Orchestrator` | The agent loop + tool gating |
+| `context_engine/session_store.py` | `SessionStore` | Save/load a conversation as JSON |
 | `observability/usage.py` | `UsageTracker`, `cost_for` | Accumulate tokens; estimate spend |
 | `observability/log.py` | `EventLogger` | Append a JSONL trace of events |
-| `observability/memory_tracker.py` | `MemoryTracker` | Automatic "what am I working on" summary, independent of `tools/memory.py` (D16) |
-| `interfaces/cli.py` | `main`, `Session` | Terminal I/O, approvals, session commands, MCP wiring |
+| `context_engine/memory_tracker.py` | `MemoryTracker` | Automatic "what am I working on" summary, independent of `context_engine/memory_tool.py` (D16) |
+| `interfaces/cli.py` | `main`, `Session` | Terminal I/O, approvals, session commands, MCP wiring, `/model` switching (D21) |
 | `pipeline/runner.py` | `PipelineRunner` | Outer multi-stage loop: implement → self-review → verify → test → sync-docs (D15) |
 | `pipeline/worktree.py` | worktree/commit helpers | Isolated git worktree per slice; the stuck-detection signal |
 | `pipeline/state.py` | `SliceState`, `ProgressLog` | Persist slice status + an append-only progress trail |
@@ -73,7 +88,7 @@ an interface. Wiring happens only in `interfaces/` via `providers/factory.py`.
 
 ## The request lifecycle
 
-What happens on one `agent.run("...")` call (`core/orchestrator.py`):
+What happens on one `agent.run("...")` call (`engine/orchestrator.py`):
 
 ```
 user text ─▶ append {role:user} to history
@@ -107,7 +122,7 @@ which interface it's serving.
 ## The message-format contract (important)
 
 There is exactly **one internal ("neutral") message format**, and it is
-OpenAI-style. Everything in `core/` and `interfaces/` uses only this. Providers
+OpenAI-style. Everything in `engine/` and `interfaces/` uses only this. Providers
 are the *only* place allowed to know a native format.
 
 Neutral messages are dicts with these shapes:
@@ -163,17 +178,17 @@ reports what's live. The CLI wires this at startup from `.harness/mcp.json`
 
 "Memory" is deliberately not one component:
 
-- `tools/memory.py` — a plain tool (`view`/`create`/`str_replace`/`insert`/
+- `context_engine/memory_tool.py` — a plain tool (`view`/`create`/`str_replace`/`insert`/
   `delete`/`rename` over a confined directory) the model calls when it
   decides something is worth remembering across turns or sessions. Same
   shape as every other tool — nothing provider-specific (D16).
-- `observability/memory_tracker.py`'s `MemoryTracker` — listens on the same
+- `context_engine/memory_tracker.py`'s `MemoryTracker` — listens on the same
   `on_event` stream as `EventLogger` and automatically maintains
   `<memory_dir>/activity.md`: the current task, files touched, tool usage
   counts. Works whether or not the model ever calls the memory tool.
 
 Neither imports the other. `interfaces/cli.py` is the only place that knows
-both exist: it points `tools/memory.py` at `config.memory_dir` via
+both exist: it points `context_engine/memory_tool.py` at `config.memory_dir` via
 `set_memory_root()`, and fans `on_event` out to both `EventLogger` and
 `MemoryTracker` via `_make_event_handler(*listeners)` — any object with a
 `log(kind, *details)` method can be added or removed there as a one-line
@@ -219,7 +234,7 @@ reverse D1.
 
 `pipeline/` is a second entry point (`python pipeline.py "<task>"`,
 `interfaces/pipeline_cli.py`) for autonomous multi-stage work, sitting above
-`core/` rather than inside it. One `PipelineRunner.run(task)` call:
+`engine/` rather than inside it. One `PipelineRunner.run(task)` call:
 
 ```
 create an isolated git worktree + branch
@@ -242,17 +257,63 @@ sync_docs -> stop (no push/PR in v1 — hand back the committed branch)
 ```
 
 Every stage is an ordinary, bounded call to the *unmodified*
-`core.orchestrator.Orchestrator` — the pipeline adds no new capability to the
+`engine.orchestrator.Orchestrator` — the pipeline adds no new capability to the
 loop itself, only a calling pattern around it (D15). Because no human is
 present to answer an "ask" permission decision during an autonomous run, the
 pipeline's approver always denies rather than always allows; run with
 `HARNESS_PERMISSION_MODE=allowlist` or `auto` for it to make progress.
 
+## Runtime model switching (`/model`)
+
+`Session.switch_model(model)` (`interfaces/cli.py`) rebuilds the provider from
+a new model string without losing the conversation: it builds a fresh `Config`
+(`dataclasses.replace`, only `model` differs) and a fresh `Provider` via
+`build_provider`, points the *existing* `Conversation`'s summarizer at the new
+provider, and rebuilds the `Orchestrator` around the same conversation object.
+If `build_provider` rejects the new model string, nothing is mutated — the
+session keeps its old provider/config/agent untouched (D21). No new
+abstraction: this is the same `build_provider(config)` call `main()` already
+makes once at startup, just callable again mid-session.
+
+## Multi-user login (`auth/`)
+
+`interfaces/cli.py`'s `main()` calls `_login(config.users_config_path)`
+before anything else is built. `_login` reads `auth/users.py`'s `UserStore`
+(a JSON file, same external-config shape as `.harness/mcp.json` /
+`roles.json` / `skills.json`): an unrecognized username walks through account
+creation (choose + confirm a password), a recognized one is checked against
+its stored salted PBKDF2 hash. Either way it returns a username, which
+`main()` immediately turns into `config = config.for_user(username)` —
+`sessions_dir`, `memory_dir`, `logs_dir`, and `offload_dir` all get the
+username appended, so two logged-in users never read or write each other's
+data even though they share the same process's `registry`, MCP connections,
+and org-wide `.harness/*.json` config (D22). `HARNESS_USER`/`HARNESS_PASSWORD`
+skip the interactive prompt for scripted/demo runs.
+
+## Planning (`todo_write` / `todo_read`)
+
+`engine/builtin/planning.py` holds one ordered checklist in a module-level
+list -- `todo_write(steps)` replaces it wholesale, `todo_read()` renders it.
+No new orchestrator concept: it's a tool like any other, just one whose
+"state" is the plan itself rather than a side effect on disk. `Session.reset()`
+and a successful `/load` both call `reset_plan()` so a new or resumed
+conversation doesn't inherit a stale plan (D23).
+
+## Web search (`web_search`, opt-in)
+
+`engine/builtin/search.py`'s `build_search_tool(api_key)` wraps the Tavily
+API over plain `urllib` (no new dependency, same as `fetch_url`). It's the
+one `engine/builtin/` tool that does **not** self-register on import --
+`interfaces/cli.py` and `interfaces/pipeline_cli.py` each call
+`registry.register(build_search_tool(config.search_api_key))` only when
+`HARNESS_SEARCH_API_KEY` is set, so an unconfigured harness simply doesn't
+have the tool rather than having one that always errors (D24).
+
 ## Extension points (where new work goes)
 
 | To add… | Do this | Files touched |
 |---------|---------|---------------|
-| A tool | Define a `Tool`, `registry.register(...)`, import the module | new `tools/x.py` |
+| A tool | Define a `Tool`, `registry.register(...)`, import the module | new `engine/builtin/x.py` |
 | A provider | Subclass `Provider`, add a branch in the factory | new `providers/x.py`, `factory.py` |
 | An interface | New module supplying `approver` + `on_event`, wire via `build_provider` | new `interfaces/x.py` |
 | A permission mode | Extend `permissions.check` | `permissions.py` |
@@ -265,11 +326,13 @@ Step-by-step recipes are in [CONTRIBUTING.md](CONTRIBUTING.md).
 - `config.max_tokens` bounds model output per turn.
 - `config.max_context_tokens` triggers history compaction before the window
   overflows; `keep_recent_messages` stays verbatim.
-- Tool outputs are truncated (~20k chars) to protect the context window.
+- Tool outputs over ~20k chars are offloaded to a file (`engine/builtin/offload.py`,
+  D19) instead of truncated away — a preview stays inline, the rest is
+  recoverable via `read_file`.
 - The permission layer gates every action; `dangerous` tools never run silently
   outside `auto` mode.
-- Sessions auto-save after each turn (`store/`); every event is traced to a JSONL
-  log (`observability/log.py`).
+- Sessions auto-save after each turn (`context_engine/session_store.py`); every
+  event is traced to a JSONL log (`observability/log.py`).
 
 ## Roadmap position
 
@@ -277,12 +340,17 @@ Step-by-step recipes are in [CONTRIBUTING.md](CONTRIBUTING.md).
   tools, CLI, smoke test.
 - **Phase 2 (done):** context management (history compaction), session
   persistence, observability + cost tracking, `fetch_url` web tool.
-- **Phase 3 (in progress):** MCP client (`tools/mcp_client.py`, dynamic
+- **Phase 3 (in progress):** MCP client (`engine/mcp_client.py`, dynamic
   tools), autonomous multi-stage pipeline (`pipeline/`, stops before push/PR),
-  agent memory (`tools/memory.py` + `observability/memory_tracker.py`,
+  agent memory (`context_engine/memory_tool.py` + `context_engine/memory_tracker.py`,
   D16), skill commands (`/review`/`/verify`/`/test`/`/docs`), multi-agent
-  delegation (`multiagent/`, D17). Still open: HTTP API, per-user config,
-  Slack interface, web *search*, pipeline push/PR automation, cross-model
-  review, parallel slices, labeling sub-agent activity in the CLI output.
+  delegation (`multiagent/`, D17), runtime model switching (`/model`, D21),
+  multi-user login + per-user session isolation (`auth/`, D22), an explicit
+  planning tool (`todo_write`/`todo_read`, D23), opt-in web search (`web_search`
+  via Tavily, D24). Still open: HTTP API, Slack interface, sandboxed/isolated
+  execution, a browser tool, pipeline push/PR automation, cross-model review,
+  parallel slices, labeling sub-agent activity in the CLI output, and account
+  management beyond signup/verify (no password reset, no roles/permissions
+  per account yet).
 
 These phases slot into the existing folders without reshaping the loop.

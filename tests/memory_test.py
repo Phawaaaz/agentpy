@@ -11,10 +11,10 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import tools.memory as memory_tool
+import context_engine.memory_tool as memory_tool
+from context_engine.memory_tracker import MemoryTracker
+from engine.registry import registry
 from observability.log import EventLogger
-from observability.memory_tracker import MemoryTracker
-from tools.registry import registry
 
 
 def test_memory_tool_crud():

@@ -8,15 +8,18 @@ its progress. All pipeline logic lives in pipeline/; no agent logic here.
 import sys
 
 from config import Config
+from engine.registry import registry
 from pipeline.config import PipelineConfig
 from pipeline.runner import PipelineRunner
 from providers.factory import build_provider
-from tools.registry import registry
 
 # Importing these modules registers their tools onto the shared registry.
-import tools.filesystem  # noqa: F401
-import tools.shell  # noqa: F401
-import tools.web  # noqa: F401
+import engine.builtin.filesystem  # noqa: F401
+import engine.builtin.offload
+import engine.builtin.planning  # noqa: F401
+import engine.builtin.shell  # noqa: F401
+import engine.builtin.web  # noqa: F401
+from engine.builtin.search import build_search_tool
 
 
 def _on_event(kind: str, *details) -> None:
@@ -59,6 +62,9 @@ def main() -> None:
             "the pipeline will likely get stuck immediately. Set it to 'allowlist' or 'auto' "
             "for the pipeline to make real progress.\n"
         )
+    engine.builtin.offload.set_offload_root(config.offload_dir)
+    if config.search_api_key:
+        registry.register(build_search_tool(config.search_api_key))
     provider = build_provider(config)
     runner = PipelineRunner(provider, registry, config, PipelineConfig.load(), on_event=_on_event)
 

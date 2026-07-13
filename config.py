@@ -5,7 +5,15 @@ loaded once from environment variables (and a .env file if present).
 """
 
 import os
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, replace
+
+# Usernames become directory path components (Config.for_user); confine them
+# to a safe charset so "../other_user" or "/tmp/evil" can't escape the
+# intended per-user directory (same whitelist-the-untrusted-component pattern
+# as context_engine/session_store.py's session_id and observability/log.py's
+# run_id).
+_VALID_USERNAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 try:
     from dotenv import load_dotenv
@@ -67,6 +75,34 @@ class Config:
     roles_config_path: str = ".harness/roles.json"
     # User-defined skills (on-demand prompt templates), merged with the built-in ones.
     skills_config_path: str = ".harness/skills.json"
+    # Where oversized tool output gets written instead of silently truncated.
+    offload_dir: str = ".harness/offload"
+    # Where user accounts (username + salted/hashed password) are stored.
+    users_config_path: str = ".harness/users.json"
+    # Tavily API key for the web_search tool. Unset = no tool registered (D24).
+    search_api_key: str | None = None
+
+    def for_user(self, username: str) -> "Config":
+        """A copy of this Config with per-user data directories namespaced by
+        username, so concurrent users never see each other's sessions,
+        memory, logs, or offloaded output. Org-wide config (model, MCP
+        servers, roles, skills) is untouched -- those aren't a user's data.
+
+        Rejects a username that isn't a safe directory-name component --
+        without this, "../alice" or "/tmp/evil" would let one user's
+        directories collide with another's or escape .harness/ entirely."""
+        if not _VALID_USERNAME.match(username):
+            raise ValueError(
+                f"invalid username {username!r}: must be 1-64 characters of "
+                "letters, digits, underscore, or hyphen"
+            )
+        return replace(
+            self,
+            sessions_dir=os.path.join(self.sessions_dir, username),
+            memory_dir=os.path.join(self.memory_dir, username),
+            logs_dir=os.path.join(self.logs_dir, username),
+            offload_dir=os.path.join(self.offload_dir, username),
+        )
 
     @classmethod
     def load(cls) -> "Config":
@@ -90,4 +126,7 @@ class Config:
             memory_dir=os.getenv("HARNESS_MEMORY_DIR", cls.memory_dir),
             roles_config_path=os.getenv("HARNESS_ROLES_CONFIG", cls.roles_config_path),
             skills_config_path=os.getenv("HARNESS_SKILLS_CONFIG", cls.skills_config_path),
+            offload_dir=os.getenv("HARNESS_OFFLOAD_DIR", cls.offload_dir),
+            users_config_path=os.getenv("HARNESS_USERS_FILE", cls.users_config_path),
+            search_api_key=os.getenv("HARNESS_SEARCH_API_KEY") or None,
         )

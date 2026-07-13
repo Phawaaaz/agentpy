@@ -22,9 +22,9 @@ Each module has one reason to change.
 
 | Module | Its one job | What it does *not* do |
 |--------|-------------|-----------------------|
-| `core/orchestrator.py` | Run the observe→think→act loop | Doesn't format output, call SDKs, or run tools itself |
-| `core/permissions.py` | Decide allow / ask / deny | Doesn't prompt the human or execute anything |
-| `tools/registry.py` | Store and dispatch tools | Doesn't know what any specific tool does |
+| `engine/orchestrator.py` | Run the observe→think→act loop | Doesn't format output, call SDKs, or run tools itself |
+| `engine/permissions.py` | Decide allow / ask / deny | Doesn't prompt the human or execute anything |
+| `engine/registry.py` | Store and dispatch tools | Doesn't know what any specific tool does |
 | `providers/*_provider.py` | Translate to/from one model API | Doesn't know about the loop or tools' meaning |
 | `interfaces/cli.py` | Talk to the human | Doesn't contain agent logic |
 
@@ -36,7 +36,7 @@ split it.
 Open for extension, closed for modification.
 
 - Add a **tool** → create a `Tool` and `registry.register(...)` it. The
-  orchestrator is untouched. (`tools/filesystem.py`, `tools/shell.py`)
+  orchestrator is untouched. (`engine/builtin/filesystem.py`, `engine/builtin/shell.py`)
 - Add a **provider** → subclass `Provider` and add one branch to
   `providers/factory.py`. The loop is untouched.
 - Add a **permission mode** → extend `permissions.check`. Callers are untouched.
@@ -65,7 +65,7 @@ don't use.
 
 - `Provider` has exactly one method. A new backend implements one thing.
 - The interface↔core boundary uses two tiny callback types —
-  `Approver` and `EventHook` (`core/orchestrator.py`) — not a fat "UI" object.
+  `Approver` and `EventHook` (`engine/orchestrator.py`) — not a fat "UI" object.
   The CLI supplies two small functions; a Slack bot later supplies two different
   ones. Neither implements anything it doesn't need.
 
@@ -118,7 +118,7 @@ shapes. This contract is specified in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ### 5. Type everything public
 Public functions and dataclasses carry type hints (see `providers/base.py`,
-`tools/registry.py`). Types are documentation that can't go stale.
+`engine/registry.py`). Types are documentation that can't go stale.
 
 ### 6. Docstrings say *why*, comments explain the non-obvious
 Every module has a top docstring stating its purpose. Inline comments explain
@@ -138,7 +138,7 @@ compatible providers — not speculatively.
 
 ### 9. Keep the folders honest
 The directory layout *is* the architecture. A file's location declares its layer.
-Don't put provider logic in `core/`, or agent logic in `interfaces/`.
+Don't put provider logic in `engine/`, or agent logic in `interfaces/`.
 
 ### 10. Testability is a design constraint, not an afterthought
 Because the orchestrator depends on abstractions, it's testable without network,

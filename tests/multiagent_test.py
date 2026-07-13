@@ -11,11 +11,11 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import Config
-from core.orchestrator import Orchestrator
+from engine.orchestrator import Orchestrator
+from engine.registry import Registry, Tool
 from multiagent.coordinator import FilteredRegistry, build_delegate_tool
 from multiagent.roles import AgentRole, load_roles
 from providers.base import Provider, Response, ToolCall
-from tools.registry import Registry, Tool
 
 
 class FakeProvider(Provider):

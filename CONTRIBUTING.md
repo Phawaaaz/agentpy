@@ -4,7 +4,7 @@ How to change this codebase without breaking its design. Read
 [PRINCIPLES.md](PRINCIPLES.md) once; it's the standard every change is held to.
 This file is the practical "how do I add X" companion.
 
-The golden rule: **you should almost never edit `core/orchestrator.py`.** New
+The golden rule: **you should almost never edit `engine/orchestrator.py`.** New
 capability goes at the edges — a new tool, provider, or interface.
 
 ## Setup
@@ -23,13 +23,13 @@ python tests/smoke_test.py  # should print SMOKE TEST PASSED (no key needed)
 
 A tool is a function plus a schema. Example — add a `find_files` tool:
 
-1. Create or open a module in `tools/` and write the handler. **It must return a
-   string on every path, including errors** (PRINCIPLES rule 1):
+1. Create or open a module in `engine/builtin/` and write the handler. **It must
+   return a string on every path, including errors** (PRINCIPLES rule 1):
 
    ```python
-   # tools/search.py
+   # engine/builtin/search.py
    import glob as _glob
-   from .registry import Tool, registry
+   from ..registry import Tool, registry
 
    def find_files(pattern: str) -> str:
        try:
@@ -59,7 +59,7 @@ A tool is a function plus a schema. Example — add a `find_files` tool:
    imported in `interfaces/cli.py` (and `tests/smoke_test.py`):
 
    ```python
-   import tools.search  # noqa: F401
+   import engine.builtin.search  # noqa: F401
    ```
 
 3. Choose the right `risk`:
@@ -127,10 +127,10 @@ An interface is thin: capture input, report events, handle approvals, wire deps.
    ```python
    # interfaces/slack.py (sketch)
    from config import Config
-   from core.orchestrator import Orchestrator
+   from engine.orchestrator import Orchestrator
    from providers.factory import build_provider
-   from tools.registry import registry
-   import tools.filesystem, tools.shell  # register tools
+   from engine.registry import registry
+   import engine.builtin.filesystem, engine.builtin.shell  # register tools
 
    def handle_message(text, say):
        config = Config.load()
@@ -143,7 +143,7 @@ An interface is thin: capture input, report events, handle approvals, wire deps.
 
 3. Put **no agent logic** in the interface (PRINCIPLES: Single Responsibility).
    If you're tempted to make a decision about tools or the loop here, it belongs
-   in `core/`.
+   in `engine/`.
 
 ---
 
@@ -175,7 +175,7 @@ of bounded `Orchestrator.run()` calls. To add a stage:
    helper so it's committed and logged to `progress.log` the same way every
    other stage is.
 
-`core/orchestrator.py` is never touched for this — the pipeline only composes
+`engine/orchestrator.py` is never touched for this — the pipeline only composes
 it (DESIGN.md D15).
 
 ## How to add a SKILL (an on-demand slash command)

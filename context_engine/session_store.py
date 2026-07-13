@@ -8,7 +8,7 @@ filesystem now; the same interface could later wrap a database.
 import json
 import os
 
-from core.context import Conversation
+from context_engine.compaction import Conversation
 
 
 class SessionStore:

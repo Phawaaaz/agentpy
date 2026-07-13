@@ -2,33 +2,40 @@
 
 Deliberately thin: it captures input, shows what the agent is doing, handles
 approval prompts, persists sessions, reports cost, and prints the final answer.
-All agent logic lives in core/. Slash commands (/new, /save, ...) manage the
+All agent logic lives in engine/. Slash commands (/new, /save, ...) manage the
 session; anything else is a task for the agent.
 """
 
+import getpass
+import os
+from dataclasses import replace
 from datetime import datetime
 
+from auth.users import UserStore
 from config import Config
-from core.context import Conversation, make_provider_summarizer
-from core.orchestrator import Orchestrator
+from context_engine.compaction import Conversation, make_provider_summarizer
+from context_engine.memory_tracker import MemoryTracker
+from context_engine.session_store import SessionStore
+from engine.mcp_client import MCPManager, load_server_configs
+from engine.orchestrator import Orchestrator
+from engine.registry import Tool, registry
 from multiagent.coordinator import build_delegate_tool
 from multiagent.roles import load_roles
 from observability.log import EventLogger
-from observability.memory_tracker import MemoryTracker
 from observability.usage import UsageTracker
 from pipeline import stages, worktree
 from pipeline.external_skills import load_external_skills
 from providers.base import ToolCall
-from providers.factory import build_provider
-from store.session_store import SessionStore
-from tools.mcp_client import MCPManager, load_server_configs
-from tools.registry import Tool, registry
+from providers.factory import OPENAI_COMPATIBLE, build_provider
 
 # Importing these modules registers their tools onto the shared registry.
-import tools.filesystem  # noqa: F401
-import tools.memory  # noqa: F401
-import tools.shell  # noqa: F401
-import tools.web  # noqa: F401
+import context_engine.memory_tool  # noqa: F401
+import engine.builtin.filesystem  # noqa: F401
+import engine.builtin.offload
+import engine.builtin.planning
+import engine.builtin.shell  # noqa: F401
+import engine.builtin.web  # noqa: F401
+from engine.builtin.search import build_search_tool
 
 HELP = """commands:
   /new                 start a fresh conversation
@@ -37,6 +44,9 @@ HELP = """commands:
   /sessions            list saved sessions
   /cost                show token usage and estimated cost
   /memory              show what the harness has been working on
+  /model               show the current model
+  /model <name>        switch model mid-session (conversation history kept)
+  /whoami              show the logged-in user
   /mcp                 list connected MCP servers and their tools
   /mcp connect <name>  connect a server from the MCP config file
   /mcp disconnect <n>  disconnect a server and remove its tools
@@ -117,10 +127,11 @@ def _make_event_handler(*listeners):
 class Session:
     """Bundles the mutable per-session objects the CLI juggles."""
 
-    def __init__(self, config: Config, provider, on_event):
+    def __init__(self, config: Config, provider, on_event, username: str = ""):
         self.config = config
         self.provider = provider
         self.on_event = on_event
+        self.username = username
         self.usage = UsageTracker()
         self.id = datetime.now().strftime("%Y%m%d-%H%M%S")
         self.conversation = self._new_conversation()
@@ -149,8 +160,24 @@ class Session:
         self.id = datetime.now().strftime("%Y%m%d-%H%M%S")
         self.conversation = self._new_conversation()
         self.agent = self._new_agent()
+        engine.builtin.planning.reset_plan()
 
     def rebuild_agent(self) -> None:
+        self.agent = self._new_agent()
+
+    def switch_model(self, model: str) -> None:
+        """Swap the active model without losing conversation history.
+
+        Builds a fresh provider (and orchestrator) from a Config that differs
+        only in `model`; the existing Conversation object -- messages and
+        summary -- is reused as-is, just re-pointed at the new provider's
+        summarizer.
+        """
+        new_config = replace(self.config, model=model)
+        new_provider = build_provider(new_config)  # raises before anything is mutated
+        self.config = new_config
+        self.provider = new_provider
+        self.conversation.summarizer = make_provider_summarizer(self.provider)
         self.agent = self._new_agent()
 
 
@@ -187,6 +214,21 @@ def _handle_mcp_command(args: list[str], mcp_manager: MCPManager, config: Config
         print(f"disconnected '{rest[0]}'" if mcp_manager.disconnect(rest[0]) else f"'{rest[0]}' was not connected")
     else:
         print("usage: /mcp | /mcp connect <name> | /mcp disconnect <name>")
+
+
+def _handle_model_command(args: list[str], session: Session) -> None:
+    if not args:
+        print(f"current model: {session.config.model}")
+        print(f"known prefixes: {', '.join(['anthropic', *OPENAI_COMPATIBLE])} "
+              "(or set HARNESS_BASE_URL for a custom OpenAI-compatible endpoint)")
+        return
+    new_model = args[0]
+    try:
+        session.switch_model(new_model)
+    except Exception as exc:
+        print(f"failed to switch model: {exc}")
+        return
+    print(f"switched model -> {new_model}  (conversation history kept)")
 
 
 def _handle_roles_command(roles: dict) -> None:
@@ -257,6 +299,7 @@ def _handle_command(
         elif store.load(args[0], session.conversation):
             session.id = args[0]
             session.rebuild_agent()
+            engine.builtin.planning.reset_plan()
             print(f"loaded session: {args[0]}")
         else:
             print(f"no such session: {args[0]}")
@@ -267,6 +310,10 @@ def _handle_command(
         print(session.usage.summary())
     elif cmd == "/memory":
         print(memory_tracker.summary())
+    elif cmd == "/model":
+        _handle_model_command(args, session)
+    elif cmd == "/whoami":
+        print(session.username or "(not logged in)")
     elif cmd == "/mcp":
         _handle_mcp_command(args, mcp_manager, session.config)
     elif cmd == "/roles":
@@ -291,8 +338,58 @@ def _connect_configured_mcp_servers(mcp_manager: MCPManager, config: Config) -> 
             print(f"  mcp '{server.name}': failed to connect ({exc})")
 
 
+def _login(users_config_path: str, max_attempts: int = 3) -> str:
+    """Authenticate a user against `users_config_path`, registering a new
+    account on first sight of a username. Returns the logged-in username.
+
+    `HARNESS_USER`/`HARNESS_PASSWORD` skip the interactive prompt (for
+    scripted/demo use, same "env var first" convention as the rest of
+    Config.load()); with only `HARNESS_USER` set, the username is
+    pre-filled but the password is still prompted for."""
+    store = UserStore(users_config_path)
+    env_user = os.getenv("HARNESS_USER")
+    env_password = os.getenv("HARNESS_PASSWORD")
+    if env_user and env_password:
+        if store.exists(env_user):
+            if not store.verify(env_user, env_password):
+                raise SystemExit(f"login failed: wrong HARNESS_PASSWORD for '{env_user}'")
+        else:
+            store.register(env_user, env_password)
+            print(f"  created new account '{env_user}'")
+        return env_user
+
+    print("=" * 60)
+    print("  Agentic Harness  —  sign in")
+    print("=" * 60)
+    for attempt in range(max_attempts):
+        username = (env_user or input("username: ")).strip()
+        if not username:
+            continue
+        if store.exists(username):
+            password = getpass.getpass("password: ")
+            if store.verify(username, password):
+                return username
+            print("  wrong password, try again")
+        else:
+            print(f"  no such user '{username}' -- creating a new account")
+            password = getpass.getpass("choose a password: ")
+            confirm = getpass.getpass("confirm password: ")
+            if password != confirm:
+                print("  passwords did not match, try again")
+                continue
+            try:
+                store.register(username, password)
+            except ValueError as exc:
+                print(f"  {exc}")
+                continue
+            return username
+    raise SystemExit("too many failed login attempts")
+
+
 def main() -> None:
     config = Config.load()
+    username = _login(config.users_config_path)
+    config = config.for_user(username)
     provider = build_provider(config)
     run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
 
@@ -300,7 +397,8 @@ def main() -> None:
     # nothing else in this file (or in either listener) needs to change.
     logger = EventLogger(config.logs_dir, run_id)
     memory_tracker = MemoryTracker(config.memory_dir, run_id)
-    tools.memory.set_memory_root(config.memory_dir)
+    context_engine.memory_tool.set_memory_root(config.memory_dir)
+    engine.builtin.offload.set_offload_root(config.offload_dir)
     on_event = _make_event_handler(logger, memory_tracker)
 
     # Skills are opt-in too: no .harness/skills.json means just the four
@@ -323,12 +421,19 @@ def main() -> None:
             )
         )
 
-    session = Session(config, provider, on_event)
+    # Web search is opt-in too: no HARNESS_SEARCH_API_KEY means no
+    # `web_search` tool, rather than a tool that's always present but
+    # always errors (same shape as the `delegate` tool above).
+    if config.search_api_key:
+        registry.register(build_search_tool(config.search_api_key))
+
+    session = Session(config, provider, on_event, username=username)
     store = SessionStore(config.sessions_dir)
     mcp_manager = MCPManager(registry)
 
     print("=" * 60)
     print("  Agentic Harness  —  Phase 2 (CLI)")
+    print(f"  user: {username}")
     print(f"  model: {config.model}")
     print(f"  permission mode: {config.permission_mode}")
     print(f"  tools: {', '.join(t.name for t in registry.all())}")

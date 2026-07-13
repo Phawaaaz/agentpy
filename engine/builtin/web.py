@@ -8,7 +8,8 @@ plain text so the model gets readable content instead of markup. Marked
 import re
 import urllib.request
 
-from .registry import Tool, registry
+from ..registry import Tool, registry
+from .offload import maybe_offload
 
 _MAX_OUTPUT = 20_000
 _USER_AGENT = "agentic-harness/0.1 (+https://localhost)"
@@ -40,9 +41,7 @@ def fetch_url(url: str, timeout: int = 20) -> str:
 
     body = raw.decode(charset, errors="replace")
     text = _html_to_text(body) if "html" in content_type else body
-    if len(text) > _MAX_OUTPUT:
-        text = text[:_MAX_OUTPUT] + "\n... [truncated]"
-    return text or "(empty response)"
+    return maybe_offload(text, _MAX_OUTPUT, "fetch_url") or "(empty response)"
 
 
 registry.register(

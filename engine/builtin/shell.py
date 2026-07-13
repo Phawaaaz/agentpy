@@ -5,7 +5,8 @@ Marked "dangerous" so the permission layer gates it in every mode except `auto`.
 
 import subprocess
 
-from .registry import Tool, registry
+from ..registry import Tool, registry
+from .offload import maybe_offload
 
 _MAX_OUTPUT = 20_000
 
@@ -29,9 +30,7 @@ def run_command(command: str, timeout: int = 60) -> str:
         output += "\n[stderr]\n" + result.stderr
     output = output.strip() or "(no output)"
     body = f"exit code: {result.returncode}\n{output}"
-    if len(body) > _MAX_OUTPUT:
-        body = body[:_MAX_OUTPUT] + "\n... [truncated]"
-    return body
+    return maybe_offload(body, _MAX_OUTPUT, "run_command")
 
 
 registry.register(
