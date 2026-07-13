@@ -63,3 +63,9 @@ def commit_all(worktree_path: str, message: str) -> bool:
         ["git", "commit", "-m", message], cwd=worktree_path, capture_output=True, text=True
     )
     return result.returncode == 0
+
+
+def push_branch(worktree_path: str, branch: str) -> str:
+    """Push the given branch to the origin remote repository."""
+    return _run_git(["push", "origin", branch], cwd=worktree_path)
+

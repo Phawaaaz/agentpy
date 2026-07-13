@@ -15,6 +15,8 @@ from providers.factory import build_provider
 
 # Importing these modules registers their tools onto the shared registry.
 import engine.builtin.filesystem  # noqa: F401
+import engine.builtin.git_tool  # noqa: F401
+import engine.builtin.github_tool  # noqa: F401
 import engine.builtin.offload
 import engine.builtin.planning  # noqa: F401
 import engine.builtin.shell  # noqa: F401

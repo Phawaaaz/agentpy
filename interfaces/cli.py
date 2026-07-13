@@ -31,6 +31,8 @@ from providers.factory import OPENAI_COMPATIBLE, build_provider
 # Importing these modules registers their tools onto the shared registry.
 import context_engine.memory_tool  # noqa: F401
 import engine.builtin.filesystem  # noqa: F401
+import engine.builtin.git_tool  # noqa: F401
+import engine.builtin.github_tool  # noqa: F401
 import engine.builtin.offload
 import engine.builtin.planning
 import engine.builtin.shell  # noqa: F401

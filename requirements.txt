@@ -7,5 +7,10 @@ openai>=1.40.0
 # Loads API keys / settings from a .env file so they stay out of the code.
 python-dotenv>=1.0.0
 
-# MCP client: connect to external MCP servers (tools/mcp_client.py).
+# MCP client: connect to external MCP servers (engine/mcp_client.py).
 mcp>=1.2.0
+
+# Optional .harness.yaml config file support (config.py falls back to env-only
+# without it, but the YAML feature silently no-ops if this is missing).
+pyyaml>=6.0
+

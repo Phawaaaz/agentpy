@@ -49,6 +49,30 @@ what would actually save re-discovery.
 """
 
 
+def build_system_prompt(
+    base: str = DEFAULT_SYSTEM_PROMPT,
+    agents_path: str = "AGENTS.md",
+    inject_project_context: bool = True,
+) -> str:
+    """Append AGENTS.md (or similar) to the system prompt when present."""
+    if not inject_project_context or not agents_path:
+        return base
+    if not os.path.isfile(agents_path):
+        return base
+    try:
+        with open(agents_path, encoding="utf-8") as f:
+            agents = f.read().strip()
+    except OSError:
+        return base
+    if not agents:
+        return base
+    return (
+        f"{base}\n\n---\n\n"
+        f"# Project context (from {agents_path})\n\n"
+        f"{agents}"
+    )
+
+
 @dataclass
 class Config:
     """Resolved settings for one run of the harness."""
@@ -107,26 +131,44 @@ class Config:
     @classmethod
     def load(cls) -> "Config":
         """Build a Config from environment variables, falling back to defaults."""
+        yaml_data = {}
+        for filename in (".harness.yaml", ".harness.yml"):
+            if os.path.exists(filename):
+                try:
+                    import yaml
+                    with open(filename, "r", encoding="utf-8") as f:
+                        parsed = yaml.safe_load(f) or {}
+                        if isinstance(parsed, dict):
+                            yaml_data = parsed.get("harness", {}) or {}
+                        break
+                except Exception:
+                    pass
+
+        def get_val(env_name: str, yaml_key: str, default, type_conv=None):
+            env_val = os.getenv(env_name)
+            if env_val is not None:
+                return type_conv(env_val) if type_conv else env_val
+            yaml_val = yaml_data.get(yaml_key)
+            if yaml_val is not None:
+                return type_conv(yaml_val) if type_conv else yaml_val
+            return default
+
         return cls(
-            model=os.getenv("HARNESS_MODEL", cls.model),
-            api_key=os.getenv("HARNESS_API_KEY") or None,
-            base_url=os.getenv("HARNESS_BASE_URL") or None,
-            permission_mode=os.getenv("HARNESS_PERMISSION_MODE", cls.permission_mode),
-            max_steps=int(os.getenv("HARNESS_MAX_STEPS", str(cls.max_steps))),
-            max_tokens=int(os.getenv("HARNESS_MAX_TOKENS", str(cls.max_tokens))),
-            max_context_tokens=int(
-                os.getenv("HARNESS_MAX_CONTEXT_TOKENS", str(cls.max_context_tokens))
-            ),
-            keep_recent_messages=int(
-                os.getenv("HARNESS_KEEP_RECENT_MESSAGES", str(cls.keep_recent_messages))
-            ),
-            sessions_dir=os.getenv("HARNESS_SESSIONS_DIR", cls.sessions_dir),
-            logs_dir=os.getenv("HARNESS_LOGS_DIR", cls.logs_dir),
-            mcp_config_path=os.getenv("HARNESS_MCP_CONFIG", cls.mcp_config_path),
-            memory_dir=os.getenv("HARNESS_MEMORY_DIR", cls.memory_dir),
-            roles_config_path=os.getenv("HARNESS_ROLES_CONFIG", cls.roles_config_path),
-            skills_config_path=os.getenv("HARNESS_SKILLS_CONFIG", cls.skills_config_path),
-            offload_dir=os.getenv("HARNESS_OFFLOAD_DIR", cls.offload_dir),
-            users_config_path=os.getenv("HARNESS_USERS_FILE", cls.users_config_path),
-            search_api_key=os.getenv("HARNESS_SEARCH_API_KEY") or None,
+            model=get_val("HARNESS_MODEL", "model", cls.model),
+            api_key=get_val("HARNESS_API_KEY", "api_key", cls.api_key) or None,
+            base_url=get_val("HARNESS_BASE_URL", "base_url", cls.base_url) or None,
+            permission_mode=get_val("HARNESS_PERMISSION_MODE", "permission_mode", cls.permission_mode),
+            max_steps=get_val("HARNESS_MAX_STEPS", "max_steps", cls.max_steps, int),
+            max_tokens=get_val("HARNESS_MAX_TOKENS", "max_tokens", cls.max_tokens, int),
+            max_context_tokens=get_val("HARNESS_MAX_CONTEXT_TOKENS", "max_context_tokens", cls.max_context_tokens, int),
+            keep_recent_messages=get_val("HARNESS_KEEP_RECENT_MESSAGES", "keep_recent_messages", cls.keep_recent_messages, int),
+            sessions_dir=get_val("HARNESS_SESSIONS_DIR", "sessions_dir", cls.sessions_dir),
+            logs_dir=get_val("HARNESS_LOGS_DIR", "logs_dir", cls.logs_dir),
+            mcp_config_path=get_val("HARNESS_MCP_CONFIG", "mcp_config_path", cls.mcp_config_path),
+            memory_dir=get_val("HARNESS_MEMORY_DIR", "memory_dir", cls.memory_dir),
+            roles_config_path=get_val("HARNESS_ROLES_CONFIG", "roles_config_path", cls.roles_config_path),
+            skills_config_path=get_val("HARNESS_SKILLS_CONFIG", "skills_config_path", cls.skills_config_path),
+            offload_dir=get_val("HARNESS_OFFLOAD_DIR", "offload_dir", cls.offload_dir),
+            users_config_path=get_val("HARNESS_USERS_FILE", "users_config_path", cls.users_config_path),
+            search_api_key=get_val("HARNESS_SEARCH_API_KEY", "search_api_key", cls.search_api_key) or None,
         )
