@@ -118,6 +118,76 @@ def test_max_results_is_clamped():
     print("  max_results is clamped to the API's 1-10 range OK")
 
 
+_DDG_HTML = """
+<a class="result__a" href="https://docs.python.org">Python docs</a>
+<div class="result__snippet">The official documentation.</div>
+"""
+
+
+class _FakeHTMLResponse:
+    def __init__(self, html: str):
+        self._body = html.encode("utf-8")
+
+    def read(self, *a):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def test_no_key_falls_back_to_duckduckgo():
+    tool = build_search_tool(api_key=None)
+    seen = {}
+
+    def fake_urlopen(request, timeout=None):
+        seen["url"] = request.full_url
+        return _FakeHTMLResponse(_DDG_HTML)
+
+    original = _patch_urlopen(fake_urlopen)
+    try:
+        result = tool.handler(query="python")
+    finally:
+        _restore_urlopen(original)
+    assert "duckduckgo.com" in seen["url"], f"expected the DDG endpoint, got {seen['url']}"
+    assert "Python docs" in result and "https://docs.python.org" in result
+    print("  no API key -> DuckDuckGo fallback path used OK")
+
+
+def test_key_uses_tavily_not_duckduckgo():
+    tool = build_search_tool(api_key="fake-key")
+    seen = {}
+
+    def fake_urlopen(request, timeout=None):
+        seen["url"] = request.full_url
+        return _FakeResponse({"results": [{"title": "t", "url": "u", "content": "c"}]})
+
+    original = _patch_urlopen(fake_urlopen)
+    try:
+        tool.handler(query="python")
+    finally:
+        _restore_urlopen(original)
+    assert "tavily.com" in seen["url"], f"expected the Tavily endpoint, got {seen['url']}"
+    print("  API key set -> Tavily used, DuckDuckGo untouched OK")
+
+
+def test_fallback_network_error_returns_string_not_raise():
+    tool = build_search_tool(api_key=None)
+
+    def boom(*a, **k):
+        raise OSError("connection refused")
+
+    original = _patch_urlopen(boom)
+    try:
+        result = tool.handler(query="python")
+    finally:
+        _restore_urlopen(original)
+    assert result.startswith("Error searching for"), result
+    print("  fallback path network failure returns an error string OK")
+
+
 def main():
     test_tool_shape()
     test_formats_results_with_title_url_content()
@@ -125,6 +195,9 @@ def main():
     test_no_results()
     test_network_error_returns_string_not_raise()
     test_max_results_is_clamped()
+    test_no_key_falls_back_to_duckduckgo()
+    test_key_uses_tavily_not_duckduckgo()
+    test_fallback_network_error_returns_string_not_raise()
     print("SEARCH TESTS PASSED")
 
 

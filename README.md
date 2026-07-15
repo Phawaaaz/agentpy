@@ -48,6 +48,11 @@ HARNESS_API_KEY=sk-...
 Known prefixes: `anthropic/`, `openai/`, `openrouter/`, `groq/`, `together/`,
 `ollama/`. Any other OpenAI-compatible server works by setting `HARNESS_BASE_URL`.
 
+Transient failures (rate limits, dropped connections) are retried with
+exponential backoff inside each provider adapter. Optionally set
+`HARNESS_FALLBACK_MODEL` to a second model to retry a still-failing call on
+(same credentials — use a sibling model or a key-less local one).
+
 To switch models without restarting, use `/model <name>` inside a running
 session (e.g. `/model ollama/llama3.2:3b`) — it rebuilds the provider and
 keeps your conversation history.
@@ -140,12 +145,13 @@ in its own reasoning — each step tracked as `pending`/`in_progress`/
 
 ## Web search
 
-Set `HARNESS_SEARCH_API_KEY` to a [Tavily](https://tavily.com) API key (free
-tier available) to enable the `web_search` tool. Unlike the other built-in
-tools, it's opt-in: with no key set, the tool simply isn't registered,
-rather than being present and always failing. Use it for current
-information not in the model's training data; `fetch_url` is still what you
-want for a URL you already know.
+The `web_search` tool is always available, with two backends behind the one
+name: set `HARNESS_SEARCH_API_KEY` to a [Tavily](https://tavily.com) API key
+(free tier available) for reliable results, or leave it unset and the tool
+falls back to scraping DuckDuckGo — works with zero configuration, just
+less reliably (bot-detection pages, occasional empty results). Use it for
+current information not in the model's training data; `fetch_url` is still
+what you want for a URL you already know.
 
 ## Large tool output
 
@@ -219,7 +225,10 @@ python tests/offload_test.py        # oversized output -> file + preview, not lo
 python tests/model_switch_test.py   # /model command, history preserved across a switch
 python tests/auth_test.py           # password hashing, UserStore, login flow, per-user dirs
 python tests/planning_test.py       # todo_write/todo_read checklist tool
-python tests/search_test.py         # web_search formatting, error handling, mocked urlopen
+python tests/search_test.py         # web_search: Tavily + DuckDuckGo fallback, mocked urlopen
+python tests/retry_test.py          # transient-error retry/backoff + FallbackProvider
+python tests/model_info_test.py     # per-model window/output limits, factory wiring
+python tests/config_yaml_test.py    # .harness.yaml config + pipeline auto-push/PR
 ```
 
-All thirteen run against fakes — no key, no network — and should print `... PASSED`.
+All sixteen run against fakes — no key, no network — and should print `... PASSED`.

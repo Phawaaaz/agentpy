@@ -560,6 +560,61 @@ key. Accepted -- forcing configuration to get a real feature beats a
 default-on feature that's unreliable or requires committing to one specific
 provider's SDK.
 
+### D25 — One `web_search` tool, two backends (supersedes D24's registration rule)
+**Decision:** `engine/builtin/search.py`'s `build_search_tool(api_key)` is
+the only place a `web_search` tool comes from, and it is now **always**
+registered by both interfaces — with a Tavily key it calls the Tavily API
+(D24's reliable path), without one it falls back to the DuckDuckGo
+lite-HTML scraper, which moved to a plain exported function
+(`engine/builtin/web.py:duckduckgo_search`) and no longer self-registers.
+**Why:** the audit (AUDIT.md C4) found D24 was never fully landed: the old
+DuckDuckGo `web_search` still self-registered unconditionally on import,
+and when a Tavily key was set, `build_search_tool`'s registration
+silently *overwrote* it in the registry (last-write-wins, no notice) —
+the code contradicted D24's own "no key = no tool" claim. Rather than
+finishing D24 as written (delete the scraper) the owner chose to keep
+zero-config search as a real feature: one tool name, key-gated backend
+selection inside the handler, so the model sees exactly one `web_search`
+whose quality improves when a key is configured.
+**What this supersedes:** D24's "no key = no tool" registration rule.
+D24's other verdicts stand — scraping is unreliable (that's exactly why
+it's the fallback, not the primary), and a real search API with a real
+key is the preferred path.
+**Trade-off:** a zero-config install now exposes a search tool that can
+hit DuckDuckGo's bot detection and return junk — the model may waste a
+turn on a bad result where D24-as-written would have had no tool at all.
+Accepted: search-that-sometimes-degrades beat search-that-needs-setup for
+the owner's use, and offloading/`risk: dangerous` gating apply the same
+either way.
+
+### D26 — Transient-failure retries live inside each provider adapter
+**Decision:** `providers/retry.py`'s `call_with_retries` wraps the one SDK
+call in each adapter (`AnthropicProvider.complete`,
+`OpenAIProvider.complete`) with exponential backoff (3 attempts, 1s/2s)
+on that SDK's own rate-limit/connection/timeout/5xx exception types.
+`providers/fallback.py`'s `FallbackProvider` optionally wraps two whole
+providers — primary and `HARNESS_FALLBACK_MODEL` — behind the same
+one-method `Provider` interface. `providers/model_info.py` gives the
+factory and the `Conversation` construction sites per-model context
+windows and output limits (substring-matched like `PRICING`), used only
+when the user hasn't set `HARNESS_MAX_TOKENS`/`HARNESS_MAX_CONTEXT_TOKENS`
+explicitly; unknown models keep the historical 4096/100k defaults.
+**Why in the adapters and not the orchestrator:** the retryable exception
+types are SDK-specific (`anthropic.RateLimitError` vs
+`openai.RateLimitError`) — catching them in `engine/orchestrator.py` would
+mean the loop importing concrete provider SDKs, breaking D2. Each adapter
+already owns its SDK boundary; retrying there keeps the loop
+provider-blind, and `FallbackProvider` is invisible to it for the same
+reason (Liskov: it's just another `Provider`).
+**Trade-off:** both SDKs also retry internally (their clients' defaults),
+so a truly down API waits through two retry layers before failing —
+seconds, not minutes, and bounded. Accepted for the simplicity of not
+reconfiguring SDK internals. The fallback model reuses the primary's
+credentials, so cross-provider fallback (Anthropic primary → OpenAI
+fallback) needs the same key to be valid for both — in practice the
+useful pairs are same-provider (opus → haiku) or anything → local
+key-less (`ollama/...`); recorded rather than solved.
+
 ---
 
 ## Known limitations & future work
@@ -580,9 +635,10 @@ provider's SDK.
   in order. Fine for correctness; a future optimization could parallelize
   independent, read-only calls.
 - **Coarse risk model:** see D5.
-- **Web search needs a Tavily key:** `web_search` (D24) is opt-in on
-  `HARNESS_SEARCH_API_KEY` and only supports one provider; no key means the
-  tool simply isn't there.
+- **Web search without a key is best-effort:** `web_search` (D25) always
+  exists, but the key-less DuckDuckGo fallback can hit bot detection or
+  return empty results; set `HARNESS_SEARCH_API_KEY` for the reliable
+  Tavily path.
 - **The planning tool's state isn't sub-agent-scoped:** see D23's trade-off
   — a `delegate`-spawned sub-agent shares the coordinator's `todo_write`/
   `todo_read` state, since `FilteredRegistry` only hides `delegate` itself.

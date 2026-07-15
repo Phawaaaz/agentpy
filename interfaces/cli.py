@@ -27,6 +27,7 @@ from pipeline import stages, worktree
 from pipeline.external_skills import load_external_skills
 from providers.base import ToolCall
 from providers.factory import OPENAI_COMPATIBLE, build_provider
+from providers.model_info import effective_context_budget
 
 # Importing these modules registers their tools onto the shared registry.
 import context_engine.memory_tool  # noqa: F401
@@ -142,7 +143,9 @@ class Session:
     def _new_conversation(self) -> Conversation:
         return Conversation(
             self.config.system_prompt,
-            max_context_tokens=self.config.max_context_tokens,
+            max_context_tokens=effective_context_budget(
+                self.config.model, self.config.max_context_tokens
+            ),
             keep_recent_messages=self.config.keep_recent_messages,
             summarizer=make_provider_summarizer(self.provider),
         )
@@ -423,11 +426,10 @@ def main() -> None:
             )
         )
 
-    # Web search is opt-in too: no HARNESS_SEARCH_API_KEY means no
-    # `web_search` tool, rather than a tool that's always present but
-    # always errors (same shape as the `delegate` tool above).
-    if config.search_api_key:
-        registry.register(build_search_tool(config.search_api_key))
+    # Web search is always available: Tavily when HARNESS_SEARCH_API_KEY is
+    # set, a key-less DuckDuckGo fallback otherwise (one tool, two backends
+    # -- D25).
+    registry.register(build_search_tool(config.search_api_key))
 
     session = Session(config, provider, on_event, username=username)
     store = SessionStore(config.sessions_dir)

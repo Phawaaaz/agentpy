@@ -65,8 +65,9 @@ def main() -> None:
             "for the pipeline to make real progress.\n"
         )
     engine.builtin.offload.set_offload_root(config.offload_dir)
-    if config.search_api_key:
-        registry.register(build_search_tool(config.search_api_key))
+    # One web_search tool, two backends: Tavily with a key, DuckDuckGo
+    # fallback without (D25).
+    registry.register(build_search_tool(config.search_api_key))
     provider = build_provider(config)
     runner = PipelineRunner(provider, registry, config, PipelineConfig.load(), on_event=_on_event)
 

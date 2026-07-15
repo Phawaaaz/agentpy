@@ -9,9 +9,21 @@ orchestrator never has to know which provider it's talking to.
 
 import json
 
+import anthropic
 from anthropic import Anthropic
 
 from .base import Provider, Response, ToolCall, Usage
+from .retry import call_with_retries
+
+# Transient failures worth retrying with backoff; anything else (auth, bad
+# request) fails immediately -- retrying wouldn't change the answer. The
+# OpenAI adapter mirrors this with its own SDK's equivalent types.
+_RETRYABLE = (
+    anthropic.RateLimitError,
+    anthropic.APIConnectionError,
+    anthropic.APITimeoutError,
+    anthropic.InternalServerError,
+)
 
 
 class AnthropicProvider(Provider):
@@ -42,7 +54,9 @@ class AnthropicProvider(Provider):
         if native_tools:
             kwargs["tools"] = native_tools
 
-        message = self.client.messages.create(**kwargs)
+        message = call_with_retries(
+            lambda: self.client.messages.create(**kwargs), _RETRYABLE
+        )
 
         # Split Claude's reply into text and tool-use blocks.
         text_parts: list[str] = []

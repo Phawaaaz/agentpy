@@ -3,6 +3,10 @@
 Uses only the standard library (no new dependencies). HTML is reduced to rough
 plain text so the model gets readable content instead of markup. Marked
 "dangerous" because it reaches the network.
+
+Also home to `duckduckgo_search`, the key-less search fallback used by
+engine/builtin/search.py's `web_search` tool (D25) -- a plain function here,
+not a registered tool.
 """
 
 import re
@@ -45,7 +49,14 @@ def fetch_url(url: str, timeout: int = 20) -> str:
     return maybe_offload(text, _MAX_OUTPUT, "fetch_url") or "(empty response)"
 
 
-def web_search(query: str, max_results: int = 5, timeout: int = 20) -> str:
+def duckduckgo_search(query: str, max_results: int = 5, timeout: int = 20) -> str:
+    """Key-less search fallback, scraping DuckDuckGo's lite HTML endpoint.
+
+    Not registered as a tool here -- engine/builtin/search.py's single
+    `web_search` tool calls this only when no Tavily API key is configured
+    (D25). Scraping is less reliable than a real search API (bot-detection
+    pages, occasional empty results), which is exactly why it's the
+    fallback and not the primary."""
     if not query.strip():
         return "Error: query must not be empty"
     if max_results < 1:
@@ -84,10 +95,9 @@ def web_search(query: str, max_results: int = 5, timeout: int = 20) -> str:
         if snippet:
             lines.append(f"   {snippet}")
 
-    body = "\n".join(lines)
-    if len(body) > _MAX_OUTPUT:
-        body = body[:_MAX_OUTPUT] + "\n... [truncated]"
-    return body
+    # No offload/truncation here: engine/builtin/search.py's web_search
+    # handler applies maybe_offload uniformly to both search backends.
+    return "\n".join(lines)
 
 
 registry.register(
@@ -113,30 +123,3 @@ registry.register(
     )
 )
 
-registry.register(
-    Tool(
-        name="web_search",
-        description=(
-            "Search the web for a query and return result titles, URLs, and snippets. "
-            "Use when you need to discover information but don't have a specific URL. "
-            "Follow up with fetch_url to read a result page in detail."
-        ),
-        parameters={
-            "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "Search query."},
-                "max_results": {
-                    "type": "integer",
-                    "description": "Max results to return. Defaults to 5.",
-                },
-                "timeout": {
-                    "type": "integer",
-                    "description": "Max seconds to wait. Defaults to 20.",
-                },
-            },
-            "required": ["query"],
-        },
-        handler=web_search,
-        risk="dangerous",
-    )
-)

@@ -23,6 +23,7 @@ from engine.orchestrator import Approver, EventHook, Orchestrator
 from engine.registry import Registry, Tool
 from multiagent.roles import AgentRole
 from providers.base import Provider
+from providers.model_info import effective_context_budget
 
 
 class FilteredRegistry(Registry):
@@ -72,7 +73,9 @@ def build_delegate_tool(
         sub_config = replace(base_config, system_prompt=agent_role.system_prompt)
         sub_conversation = Conversation(
             sub_config.system_prompt,
-            max_context_tokens=sub_config.max_context_tokens,
+            max_context_tokens=effective_context_budget(
+                sub_config.model, sub_config.max_context_tokens
+            ),
             keep_recent_messages=sub_config.keep_recent_messages,
             summarizer=make_provider_summarizer(provider),
         )

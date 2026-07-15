@@ -163,20 +163,24 @@ implemented in `providers/anthropic_provider.py:_translate_messages`/`_translate
 blocking call returning one `Response`; DESIGN.md's own non-goals list
 "Not streaming token-by-token output yet" and that is still true today.
 
-**A4. Fallback & retry.** ❌ **Missing.** Grepped `providers/` for
-`retry|backoff|RateLimit|Timeout`: zero hits beyond `json.JSONDecodeError`
-handling of malformed tool arguments. No retry/backoff on transient errors,
-no fallback model. A rate-limited call simply raises out of `Orchestrator.run()`
-(see §2's loop-trace gap).
+**A4. Fallback & retry.** ✅ **Implemented** (Milestone 1).
+`providers/retry.py`'s `call_with_retries` wraps the SDK call in both
+adapters with exponential backoff on each SDK's own rate-limit/connection/
+timeout/5xx types; `providers/fallback.py`'s `FallbackProvider` retries a
+still-failing call on an optional `HARNESS_FALLBACK_MODEL` (D26). Verified
+by `tests/retry_test.py` (6 assertions: backoff sequence, final-error
+re-raise, non-retryable passthrough, fallback used/unused/propagates).
 
-**A5. Per-model config (context window, max tokens, cost hooks).** 🟡 **Partial.**
-Cost tracking exists and is real (`observability/usage.py`'s `PRICING` table,
-substring-matched, unpriced models report `$0` honestly). **Context window
-size and max-output-tokens are not per-model** — `config.max_tokens` (single
-int, default 4096) and `config.max_context_tokens` (single int, default
-100,000) apply identically regardless of which model is active; switching to
-a model with a materially smaller or larger real window via `/model` does not
-adjust either value.
+**A5. Per-model config (context window, max tokens, cost hooks).**
+✅ **Implemented** (Milestone 1). Cost tracking was already real
+(`observability/usage.py`'s `PRICING`). Context window and max-output-tokens
+are now per-model via `providers/model_info.py` (substring-matched, same
+convention as `PRICING`): `config.max_tokens`/`max_context_tokens` default
+to `None` and resolve to the active model's known limits at the factory and
+every `Conversation` construction site — an explicit env/config value still
+wins, and unknown models keep the historical 4096/100k defaults. `/model`
+switching picks up the new model's limits because `Session.switch_model`
+rebuilds through the same resolution. Verified by `tests/model_info_test.py`.
 
 ### B. Context Engine
 
@@ -238,29 +242,19 @@ is documentation-only and does not exist in the codebase (confirmed by
 **C3. Bash/code-execution escape hatch.** ✅ **Implemented.** `run_command`
 (`engine/builtin/shell.py`), correctly risk=`dangerous`.
 
-**C4. Web search / fetch.** 🟡 **Partial, with a real bug.**
-`fetch_url` ✅. Web search exists **twice**, under the same tool name,
-with contradictory registration semantics:
-- `engine/builtin/web.py:web_search` — DuckDuckGo HTML scraping via regex,
-  self-registers unconditionally on import (`engine/builtin/web.py:116-142`),
-  imported unconditionally by both `interfaces/cli.py:39` and
-  `interfaces/pipeline_cli.py:23`.
-- `engine/builtin/search.py:build_search_tool` — Tavily API, registered only
-  when `HARNESS_SEARCH_API_KEY` is set (`interfaces/cli.py:429-430`,
-  `interfaces/pipeline_cli.py:68-69`), which **silently overwrites** the
-  DuckDuckGo tool in the registry dict (`Registry.register`,
-  `engine/registry.py:25-27`, last write wins, no collision notice — unlike
-  the skills-collision path, which does print one, `interfaces/cli.py:411-412`).
-
-This directly contradicts the documentation: `DESIGN.md` D24 states "Unlike
-the other built-in tools, it's opt-in: with no key set, the tool simply isn't
-registered, rather than being present and always failing" — **false as
-written**, because `engine/builtin/web.py`'s `web_search` is always present
-regardless of the key. `DESIGN.md`'s own D24 rationale ("the first pass ...
-tried DuckDuckGo's free, keyless endpoints and found them unreliable in live
-testing ... not something to ship right before a demo") describes *exactly*
-the tool that is still shipping by default today. This looks like the
-DuckDuckGo tool was meant to be removed when Tavily replaced it and wasn't.
+**C4. Web search / fetch.** ✅ **Implemented** (Milestone 1; was 🟡 with a
+real bug). `fetch_url` ✅. The bug found in the audit — two `web_search`
+tools under one name, the always-on DuckDuckGo scraper in
+`engine/builtin/web.py` silently overwritten by the "opt-in" Tavily tool
+whenever a key was set, contradicting `DESIGN.md` D24's "no key = no tool"
+claim — is fixed per the owner's decision: **one** `web_search` tool
+(`engine/builtin/search.py:build_search_tool`), always registered by both
+interfaces, that calls Tavily when `HARNESS_SEARCH_API_KEY` is set and
+falls back to the (no-longer-registered, plain-function)
+`engine/builtin/web.py:duckduckgo_search` otherwise. Recorded as D25,
+superseding D24's registration rule. Verified by `tests/search_test.py`'s
+three new backend-selection assertions and a live CLI startup showing
+exactly one `web_search` in the tool list.
 
 **C5. MCP client (stdio + HTTP/SSE, discovery, exposure).** ✅ **Implemented,
 well-built.** `engine/mcp_client.py`'s `MCPManager` supports all three
@@ -513,18 +507,26 @@ existing in the first place.
 
 ## 6. Summary scorecard
 
+Updated as Phase 4 milestones land (this table originally shipped with
+miscounted rows; corrected here). ✅ counts in **bold** changed since the
+initial audit.
+
 | Area | ✅ | 🟡 | ❌ | 🔵 |
 |---|---|---|---|---|
-| A. Model Layer | 1 | 3 | 1 | 0 |
-| B. Context Engine | 2 | 2 | 0 | 0 |
-| C. Tools/Execution/MCP | 3 | 2 | 0 | 0 |
-| D. Filesystem & Workspace | 0 | 1 | 2 | 0 |
-| E. Memory | 2 | 1 | 0 | 0 |
-| F. Sessions/Multi-user/Auth | 0 | 3 | 1 | 0 |
-| G. Sandbox | 0 | 0 | 1 | 0 |
-| H. Long-Horizon | 3 | 2 | 1 | 0 |
-| I. Observability/Config | 1 | 2 | 0 | 0 |
-| **Total (23 items)** | **12** | **16** | **6** | **0** |
+| A. Model Layer (5) | **3** | 2 | 0 | 0 |
+| B. Context Engine (5) | 3 | 2 | 0 | 0 |
+| C. Tools/Execution/MCP (6) | **5** | 1 | 0 | 0 |
+| D. Filesystem & Workspace (3) | 0 | 1 | 2 | 0 |
+| E. Memory (3) | 2 | 1 | 0 | 0 |
+| F. Sessions/Multi-user/Auth (4) | 0 | 3 | 1 | 0 |
+| G. Sandbox (1) | 0 | 0 | 1 | 0 |
+| H. Long-Horizon (5) | 3 | 1 | 1 | 0 |
+| I. Observability/Config (3) | 1 | 2 | 0 | 0 |
+| **Total (35 items)** | **17** | **13** | **5** | **0** |
+
+Milestone 1 (model layer hardening) flipped A4 ❌→✅, A5 🟡→✅, and C4
+🟡→✅ (the `web_search` collision bug, resolved as one tool with a
+key-gated Tavily/DuckDuckGo backend split — D25/D26).
 
 Nothing was scored 🔵 deliberately-deferred at the item level — every gap
 found is either a real fix-now bug (the `web_search` collision), a design

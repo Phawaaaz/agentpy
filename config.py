@@ -80,13 +80,20 @@ class Config:
     model: str = "anthropic/claude-opus-4-8"
     api_key: str | None = None
     base_url: str | None = None  # for OpenAI-compatible endpoints (Ollama, etc.)
+    # Optional second model to retry a failed call on (same credentials, so
+    # use a sibling model or a key-less local one). Unset = no fallback.
+    fallback_model: str | None = None
     permission_mode: str = "ask"  # ask | allowlist | auto
     max_steps: int = 25
-    max_tokens: int = 4096
+    # None = use the active model's known limit (providers/model_info.py),
+    # falling back to the historical 4096 default for unknown models.
+    max_tokens: int | None = None
     temperature: float = 0.0
     system_prompt: str = DEFAULT_SYSTEM_PROMPT
-    # Context management: fold old history into a summary past this token budget.
-    max_context_tokens: int = 100_000
+    # Context management: fold old history into a summary past this token
+    # budget. None = derive from the active model's known context window
+    # (providers/model_info.py), else the historical 100k default.
+    max_context_tokens: int | None = None
     keep_recent_messages: int = 20
     # Persistence / observability locations.
     sessions_dir: str = ".harness/sessions"
@@ -157,6 +164,7 @@ class Config:
             model=get_val("HARNESS_MODEL", "model", cls.model),
             api_key=get_val("HARNESS_API_KEY", "api_key", cls.api_key) or None,
             base_url=get_val("HARNESS_BASE_URL", "base_url", cls.base_url) or None,
+            fallback_model=get_val("HARNESS_FALLBACK_MODEL", "fallback_model", cls.fallback_model) or None,
             permission_mode=get_val("HARNESS_PERMISSION_MODE", "permission_mode", cls.permission_mode),
             max_steps=get_val("HARNESS_MAX_STEPS", "max_steps", cls.max_steps, int),
             max_tokens=get_val("HARNESS_MAX_TOKENS", "max_tokens", cls.max_tokens, int),

@@ -7,9 +7,20 @@ Groq, Together, vLLM, etc. and the same code talks to them.
 
 import json
 
+import openai
 from openai import OpenAI
 
 from .base import Provider, Response, ToolCall, Usage
+from .retry import call_with_retries
+
+# Same transient-failure retry set as the Anthropic adapter, in this SDK's
+# own exception types (these cover every OpenAI-compatible endpoint too).
+_RETRYABLE = (
+    openai.RateLimitError,
+    openai.APIConnectionError,
+    openai.APITimeoutError,
+    openai.InternalServerError,
+)
 
 
 class OpenAIProvider(Provider):
@@ -35,7 +46,9 @@ class OpenAIProvider(Provider):
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
 
-        completion = self.client.chat.completions.create(**kwargs)
+        completion = call_with_retries(
+            lambda: self.client.chat.completions.create(**kwargs), _RETRYABLE
+        )
         message = completion.choices[0].message
 
         tool_calls: list[ToolCall] = []
