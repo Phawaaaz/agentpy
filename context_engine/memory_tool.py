@@ -16,6 +16,7 @@ import os
 
 from engine.builtin.offload import maybe_offload
 from engine.registry import Tool, registry
+from engine.workspace import confine
 
 _MAX_OUTPUT = 20_000
 _ROOT = ".harness/memory"
@@ -34,12 +35,14 @@ def set_memory_root(path: str) -> None:
 
 
 def _resolve(path: str) -> str:
-    """Confine `path` to the memory root. Raises ValueError if it escapes."""
-    root_abs = os.path.abspath(_ROOT)
-    candidate_abs = os.path.abspath(os.path.join(root_abs, path.lstrip("/")))
-    if candidate_abs != root_abs and not candidate_abs.startswith(root_abs + os.sep):
-        raise ValueError(f"path '{path}' escapes the memory directory")
-    return candidate_abs
+    """Confine `path` to the memory root (virtual-root semantics: a leading
+    "/" means the root itself). Raises ValueError if it escapes. Shares
+    engine/workspace.py's confinement logic (D27) so the memory tool's and
+    the workspace's traversal protection can't drift apart."""
+    try:
+        return confine(_ROOT, path, treat_absolute_as_relative=True)
+    except ValueError:
+        raise ValueError(f"path '{path}' escapes the memory directory") from None
 
 
 def _view(path: str, view_range: list[int] | None) -> str:

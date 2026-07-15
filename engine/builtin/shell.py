@@ -6,6 +6,7 @@ Marked "dangerous" so the permission layer gates it in every mode except `auto`.
 import subprocess
 
 from ..registry import Tool, registry
+from ..workspace import workspace_root
 from .offload import maybe_offload
 
 _MAX_OUTPUT = 20_000
@@ -19,6 +20,9 @@ def run_command(command: str, timeout: int = 60) -> str:
             capture_output=True,
             text=True,
             timeout=timeout,
+            # Confined sessions run in their workspace dir; unconfined ones
+            # keep the historical behavior (the process's own cwd) via None.
+            cwd=workspace_root(),
         )
     except subprocess.TimeoutExpired:
         return f"Error: command timed out after {timeout}s"

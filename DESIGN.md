@@ -615,6 +615,34 @@ fallback) needs the same key to be valid for both — in practice the
 useful pairs are same-provider (opus → haiku) or anything → local
 key-less (`ollama/...`); recorded rather than solved.
 
+### D27 — Workspace confinement is opt-in, shared with the memory tool's protection
+**Decision:** `engine/workspace.py` owns one confinement implementation:
+`confine(root, path)` (realpath-based, so symlinks can't smuggle access;
+rejects `../` traversal and outside absolute paths) plus a module-level
+root set per session by the interface. `HARNESS_CONFINE_WORKSPACE=true`
+(default **false**) makes `read_file`/`write_file`/`edit_file`/`list_dir`
+resolve every path inside `workspaces/{user}/{session}/` and pins
+`run_command`'s cwd there; escapes come back as error strings, never
+exceptions (PRINCIPLES rule 1). `context_engine/memory_tool.py`'s
+`_resolve` now delegates to the same `confine()` (virtual-root semantics
+preserved) instead of keeping its own copy.
+**Why opt-in instead of enforced:** the owner's explicit rollout decision
+(PLAN.md §5.4) — today's single-user CLI users read/write anywhere on disk
+on purpose, and a silent new restriction would break them; a future server
+interface sets the flag unconditionally per session, which is the actual
+target of this feature (AUDIT.md D1/D2: zero isolation was the sharpest
+gap vs. a framework default).
+**Why a module-level root:** same deliberate, startup-set global pattern
+as `set_memory_root`/`set_offload_root` — and like them it is scheduled to
+become session-scoped state in the global-state removal milestone
+(PLAN.md Milestone 3); building it session-scoped *now* would have meant
+doing half of that milestone early, out of order.
+**Trade-off:** confinement covers the built-in filesystem/shell tools, not
+MCP-server tools (a filesystem MCP server has its own allow-list) and not
+the host itself (`run_command` inside the workspace can still call
+anything on PATH — real host isolation is the sandbox's job, G1, designed
+in a later milestone). Recorded so nobody mistakes this for a sandbox.
+
 ---
 
 ## Known limitations & future work

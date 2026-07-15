@@ -202,6 +202,17 @@ Sessions auto-save after each turn to `.harness/sessions/`; events are traced to
 `.harness/logs/`. Long conversations are automatically compacted (older messages
 summarized) so they don't overflow the model's context window.
 
+## Workspace confinement (opt-in)
+
+Set `HARNESS_CONFINE_WORKSPACE=true` to confine the filesystem tools and
+`run_command` to a per-user, per-session directory
+(`workspaces/{user}/{session}/`) — `../` traversal, outside absolute paths,
+and symlink escapes are all rejected. Off by default: the single-user CLI
+historically works directly in whatever directory you launch it from, and
+that stays the default. This is a path boundary, not a sandbox — commands
+inside the workspace can still run anything on PATH (host isolation is the
+planned sandbox's job).
+
 ## Permission modes (set `HARNESS_PERMISSION_MODE` in `.env`)
 
 | Mode | Behavior |

@@ -110,8 +110,14 @@ class Config:
     offload_dir: str = ".harness/offload"
     # Where user accounts (username + salted/hashed password) are stored.
     users_config_path: str = ".harness/users.json"
-    # Tavily API key for the web_search tool. Unset = no tool registered (D24).
+    # Tavily API key for the web_search tool; unset = DuckDuckGo fallback (D25).
     search_api_key: str | None = None
+    # Workspace confinement (D27): when True, filesystem/shell tools are
+    # confined to workspaces/{user}/{session}/ and cannot reach outside it.
+    # Default False = the historical unconfined single-user CLI behavior.
+    confine_workspace: bool = False
+    # Root under which per-user, per-session workspaces are created.
+    workspace_dir: str = "workspaces"
 
     def for_user(self, username: str) -> "Config":
         """A copy of this Config with per-user data directories namespaced by
@@ -133,6 +139,7 @@ class Config:
             memory_dir=os.path.join(self.memory_dir, username),
             logs_dir=os.path.join(self.logs_dir, username),
             offload_dir=os.path.join(self.offload_dir, username),
+            workspace_dir=os.path.join(self.workspace_dir, username),
         )
 
     @classmethod
@@ -150,6 +157,12 @@ class Config:
                         break
                 except Exception:
                     pass
+
+        def to_bool(value) -> bool:
+            # bool("false") is True, so string values need real parsing.
+            if isinstance(value, str):
+                return value.strip().lower() in ("true", "yes", "1")
+            return bool(value)
 
         def get_val(env_name: str, yaml_key: str, default, type_conv=None):
             env_val = os.getenv(env_name)
@@ -179,4 +192,6 @@ class Config:
             offload_dir=get_val("HARNESS_OFFLOAD_DIR", "offload_dir", cls.offload_dir),
             users_config_path=get_val("HARNESS_USERS_FILE", "users_config_path", cls.users_config_path),
             search_api_key=get_val("HARNESS_SEARCH_API_KEY", "search_api_key", cls.search_api_key) or None,
+            confine_workspace=get_val("HARNESS_CONFINE_WORKSPACE", "confine_workspace", cls.confine_workspace, to_bool),
+            workspace_dir=get_val("HARNESS_WORKSPACE_DIR", "workspace_dir", cls.workspace_dir),
         )

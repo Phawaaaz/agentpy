@@ -274,31 +274,26 @@ raised)" assertions.
 
 ### D. Filesystem & Workspace
 
-**D1. Per-session, per-user isolated workspace directory.** ❌ **Missing.**
-This is the most significant gap found in the audit. `Config.for_user`
-(`config.py:109`) namespaces exactly four directories —
-`sessions_dir`/`memory_dir`/`logs_dir`/`offload_dir` — by username. **There
-is no workspace directory concept at all.** `read_file`/`write_file`/`edit_file`/
-`list_dir` (`engine/builtin/filesystem.py`) and `run_command`
-(`engine/builtin/shell.py`) operate directly on whatever path string the
-model supplies, or on the process's real current working directory, with
-**zero per-user or per-session confinement**. Two users of a hypothetical
-future server sharing one process would have full read/write access to each
-other's files, and to anywhere on disk the OS process can reach — the exact
-opposite of the isolation `memory_tool.py` correctly implements for memory
-files (`_resolve`, `context_engine/memory_tool.py:36-42`). The pipeline
-(`pipeline/worktree.py`) *does* get real isolation, but only because it
-`chdir`s into a git worktree per autonomous "slice" — a mechanism specific to
-the pipeline, not reachable from the interactive CLI, and not designed
-around `user_id`/`session_id` (it's a `slice_id`, tied to one git repo).
+**D1. Per-session, per-user isolated workspace directory.**
+✅ **Implemented, opt-in by owner decision** (Milestone 2, D27).
+`engine/workspace.py` + `HARNESS_CONFINE_WORKSPACE=true` confine
+`read_file`/`write_file`/`edit_file`/`list_dir` and pin `run_command`'s cwd
+to `workspaces/{user}/{session}/` (`Config.for_user` namespaces the user
+segment; `Session.apply_workspace_root` follows the session id across
+`/new`/`/load`). The default remains `false` — today's single-user CLI is
+byte-for-byte unchanged — per the rollout decision in `PLAN.md` §5.4; a
+server interface is expected to set it unconditionally. Verified by
+`tests/workspace_test.py` (confined + unconfined-default assertions) and a
+live CLI run with the flag on.
 
-**D2. Path safety (no traversal, no absolute-path escape).** ❌ **Missing**
-for the primary filesystem tools (see D1 — no confinement means no traversal
-protection is even attempted, because there's no boundary to escape). ✅
-**Implemented correctly** for the one place it *is* attempted:
-`context_engine/memory_tool.py:_resolve` confines to an absolute root and
-raises `ValueError` on escape — this is the pattern that should be, but
-currently is not, applied to `engine/builtin/filesystem.py`.
+**D2. Path safety (no traversal, no absolute-path escape).**
+✅ **Implemented** (Milestone 2, D27) — when confinement is on: `../`
+traversal, outside absolute paths, and symlink escapes (realpath-based) are
+all rejected as error strings, never exceptions. The memory tool's
+previously separate `_resolve` now delegates to the same shared
+`engine/workspace.py:confine`, so the two protections can't drift. With
+confinement off (the default), no boundary exists to protect — that is the
+documented, owner-chosen default for the local CLI, not an oversight.
 
 **D3. Git integration for rollback/continuity.** 🟡 **Partial.**
 Read-only git tools exist and are exposed to the interactive agent
@@ -516,17 +511,20 @@ initial audit.
 | A. Model Layer (5) | **3** | 2 | 0 | 0 |
 | B. Context Engine (5) | 3 | 2 | 0 | 0 |
 | C. Tools/Execution/MCP (6) | **5** | 1 | 0 | 0 |
-| D. Filesystem & Workspace (3) | 0 | 1 | 2 | 0 |
+| D. Filesystem & Workspace (3) | **2** | 1 | 0 | 0 |
 | E. Memory (3) | 2 | 1 | 0 | 0 |
 | F. Sessions/Multi-user/Auth (4) | 0 | 3 | 1 | 0 |
 | G. Sandbox (1) | 0 | 0 | 1 | 0 |
 | H. Long-Horizon (5) | 3 | 1 | 1 | 0 |
 | I. Observability/Config (3) | 1 | 2 | 0 | 0 |
-| **Total (35 items)** | **17** | **13** | **5** | **0** |
+| **Total (35 items)** | **19** | **12** | **4** | **0** |
 
 Milestone 1 (model layer hardening) flipped A4 ❌→✅, A5 🟡→✅, and C4
 🟡→✅ (the `web_search` collision bug, resolved as one tool with a
-key-gated Tavily/DuckDuckGo backend split — D25/D26).
+key-gated Tavily/DuckDuckGo backend split — D25/D26). Milestone 2
+(workspace isolation, D27) flipped D1 ❌→✅ and D2 ❌→✅ (opt-in
+confinement per the owner's rollout decision; default off for the local
+CLI).
 
 Nothing was scored 🔵 deliberately-deferred at the item level — every gap
 found is either a real fix-now bug (the `web_search` collision), a design

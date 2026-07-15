@@ -38,6 +38,7 @@ import engine.builtin.offload
 import engine.builtin.planning
 import engine.builtin.shell  # noqa: F401
 import engine.builtin.web  # noqa: F401
+import engine.workspace
 from engine.builtin.search import build_search_tool
 
 HELP = """commands:
@@ -139,6 +140,18 @@ class Session:
         self.id = datetime.now().strftime("%Y%m%d-%H%M%S")
         self.conversation = self._new_conversation()
         self.agent = self._new_agent()
+        self.apply_workspace_root()
+
+    def apply_workspace_root(self) -> None:
+        """Point tool confinement at this session's own workspace directory
+        (workspaces/{user}/{session}/) when confinement is on (D27); a no-op
+        root (None) otherwise. Re-called whenever the session id changes."""
+        if self.config.confine_workspace:
+            engine.workspace.set_workspace_root(
+                os.path.join(self.config.workspace_dir, self.id)
+            )
+        else:
+            engine.workspace.set_workspace_root(None)
 
     def _new_conversation(self) -> Conversation:
         return Conversation(
@@ -166,6 +179,7 @@ class Session:
         self.conversation = self._new_conversation()
         self.agent = self._new_agent()
         engine.builtin.planning.reset_plan()
+        self.apply_workspace_root()
 
     def rebuild_agent(self) -> None:
         self.agent = self._new_agent()
@@ -305,6 +319,7 @@ def _handle_command(
             session.id = args[0]
             session.rebuild_agent()
             engine.builtin.planning.reset_plan()
+            session.apply_workspace_root()
             print(f"loaded session: {args[0]}")
         else:
             print(f"no such session: {args[0]}")
