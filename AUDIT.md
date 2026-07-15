@@ -439,7 +439,13 @@ Memory root remains shared by design (`DESIGN.md` D17). Verified by
 copied-context case.
 
 **H5. Hooks/middleware (pre/post tool-call, pre/post model-call).**
-❌ **Missing as a general mechanism.** What exists: `on_event` (`EventHook`,
+✅ **Implemented** (Milestone 7, D32). `engine/hooks.py` + four fixed
+interception points in the orchestrator: pre/post model call and pre/post
+tool call, with pre_tool able to veto (string result) or rewrite a call.
+Constructor-injected; empty hooks leave the loop byte-identical (regression-
+guarded). Verified by `tests/hooks_test.py` (5 cases through the real loop)
+plus the full suite. The original finding, kept for the record:
+**was missing as a general mechanism.** What exists: `on_event` (`EventHook`,
 `engine/orchestrator.py:20`) is a **read-only observation** callback fired
 *after* each event (thinking/tool_call/tool_result/denied/compacted/usage) —
 listeners (`EventLogger`, `MemoryTracker`) can react to but not alter or
@@ -519,9 +525,9 @@ initial audit.
 | E. Memory (3) | **3** | 0 | 0 | 0 |
 | F. Sessions/Multi-user/Auth (4) | **3** | 1 | 0 | 0 |
 | G. Sandbox (1) | 0 | 0 | 1 | 0 |
-| H. Long-Horizon (5) | 3 | 1 | 1 | 0 |
+| H. Long-Horizon (5) | **4** | 1 | 0 | 0 |
 | I. Observability/Config (3) | 1 | 2 | 0 | 0 |
-| **Total (35 items)** | **23** | **9** | **3** | **0** |
+| **Total (35 items)** | **24** | **9** | **2** | **0** |
 
 Milestone 1 (model layer hardening) flipped A4 ❌→✅, A5 🟡→✅, and C4
 🟡→✅ (the `web_search` collision bug, resolved as one tool with a
@@ -536,7 +542,8 @@ data migrated by `scripts/migrate_json_to_db.py`. Milestone 5 (auth
 scaffolding + admin monitoring, D30) flipped F4 🟡→✅: JWT
 issue/verify at login, admin/user roles, durable per-call usage logging
 with admin-only `/usage`/`/users` views. Milestone 6 (memory
-injection, D31) flipped E3 🟡→✅.
+injection, D31) flipped E3 🟡→✅. Milestone 7 (hooks, D32) flipped
+H5 ❌→✅.
 
 Nothing was scored 🔵 deliberately-deferred at the item level — every gap
 found is either a real fix-now bug (the `web_search` collision), a design

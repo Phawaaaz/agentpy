@@ -268,6 +268,7 @@ python tests/concurrency_test.py    # two sessions, zero state leakage (D28)
 python tests/storage_test.py        # DB users/sessions, isolation, JSON->DB migration (D29)
 python tests/token_test.py          # JWT issue/verify/expiry/tamper (D30)
 python tests/usage_store_test.py    # durable usage rows + admin gating (D30)
+python tests/hooks_test.py          # pre/post model+tool interception points (D32)
 ```
 
-All twenty-one run against fakes — no key, no network — and should print `... PASSED`.
+All twenty-two run against fakes — no key, no network — and should print `... PASSED`.

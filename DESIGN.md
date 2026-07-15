@@ -758,6 +758,31 @@ whatever prompt it was saved with rather than re-injecting current memory.
 Both accepted: the cap bounds the cost, and re-injecting into a restored
 conversation would rewrite history the summary/compaction may reference.
 
+### D32 — A hooks layer makes cross-cutting behavior pluggable
+**Decision:** `engine/hooks.py`'s `Hooks` dataclass carries four ordered
+lists of plain callables the orchestrator runs at fixed points:
+`pre_model_call(messages)`, `post_model_call(response)`,
+`pre_tool_call(tool_call, tool)` (return a string to veto — it becomes
+the tool result the model sees, same "denial is an observation" contract
+as D5/D6 — or the possibly-rewritten call to proceed), and
+`post_tool_call(tool_call, result)`. Injected through `Orchestrator`'s
+constructor like every other collaborator; an empty `Hooks()` (the
+default everywhere today) leaves the loop byte-for-byte identical.
+**Why this is the sanctioned edit to the loop:** AGENTS.md's rule is
+"you should almost never edit `engine/orchestrator.py`" — and the audit
+(H5) showed that rule was being *violated in spirit* by every
+cross-cutting concern already in the loop: compaction and permissions are
+baked in because there was nowhere else to put them. This change adds the
+extension point itself, so the *next* guardrail, redaction pass, or
+context injector is a new file + a `Hooks(...)` argument, not another
+edit. Compaction and permissions are deliberately NOT retrofitted onto
+the mechanism — they work, they're tested, and churning them for purity
+buys nothing (PRINCIPLES rule 8).
+**Trade-off:** hooks are power tools — a badly written pre_model hook can
+corrupt history, and hook errors are not swallowed (unlike tool errors)
+because a broken guardrail failing open would be worse than a crash.
+Accepted and documented rather than defended against.
+
 ---
 
 ## Known limitations & future work
