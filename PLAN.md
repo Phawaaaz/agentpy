@@ -72,11 +72,18 @@ files on disk.**
   to query across sessions/users (e.g. "list this user's sessions ordered by
   last activity" currently means listing a directory and stat-ing every
   file). A relational store fixes both with a small, well-understood schema:
-  `users(id, username, password_hash, salt, created_at)`,
+  `users(id, username, password_hash, salt, role, created_at)` (`role`:
+  `admin` | `user` — see Milestone 5's admin-monitoring requirement),
   `sessions(id, user_id, created_at, updated_at, title)`,
   `messages(id, session_id, role, content, tool_call_id, seq)` (replacing the
   single JSON blob-per-session with queryable rows — enables "resume from
-  message N" without deserializing the whole history), `memory_index(user_id,
+  message N" without deserializing the whole history),
+  `usage_log(id, user_id, session_id, model, prompt_tokens,
+  completion_tokens, cost_usd, task, created_at)` (one row per model call,
+  written from the same place `UsageTracker.record` already fires — this is
+  what makes per-user, per-task token accounting queryable by an admin
+  instead of dying with the process, closing the gap that `UsageTracker`
+  today is in-memory-only and unkeyed by user), and `memory_index(user_id,
   path, updated_at)` (an index over the memory tool's files, not a
   replacement for them — see below).
 - **SQLite now**: zero ops, one file, works identically in the CLI's current
@@ -247,10 +254,19 @@ become thin adapters or are replaced outright by the new `storage/` package
 switching backends anyway is extra indirection with no caller depending on
 the old module paths, per PRINCIPLES rule 8's "don't over-abstract").
 Confirmed in scope for this round (not deferred).
-**Design decisions:** see §2 above for the schema. Migration path: a
-one-time script reads existing `.harness/sessions/*.json` and
-`.harness/users.json` and inserts them into the new SQLite DB, so no one
-loses saved sessions when this ships.
+**Design decisions:** see §2 above for the schema. The backend is chosen by
+a single connection string, `HARNESS_DB_URL` (default:
+`sqlite:///.harness/harness.db`) — set it to a
+`postgresql+psycopg://...` URL and users/sessions/usage all live in
+Postgres immediately, no code change; SQLite remains the zero-ops default
+for local CLI use. (Note for the security-minded: Postgres vs SQLite does
+not change *login* security — that's governed by password hashing
+(PBKDF2, already in place), token signing (Milestone 5), and transport;
+what Postgres buys is safe concurrent writes and central management once
+multiple processes/users hit the same store.) Migration path: a one-time
+script reads existing `.harness/sessions/*.json` and `.harness/users.json`
+and inserts them into whichever database `HARNESS_DB_URL` points at, so no
+one loses saved sessions when this ships.
 **Verification:** port `tests/phase2_test.py`'s session round-trip assertion
 and `tests/auth_test.py`'s hashing/verify assertions onto the new store
 (same test *behavior*, new backend — proves the interface swap is
@@ -258,16 +274,22 @@ transparent); manual: run the migration script against a real `.harness/`
 directory produced by the current code, confirm `/sessions` and `/load`
 still work post-migration.
 
-### Milestone 5 — Auth scaffolding for the server phase
+### Milestone 5 — Auth scaffolding + admin monitoring
 **Closes:** F4 (planned-but-designed, per the product context's explicit
-allowance).
+allowance), plus the owner's added requirement: **an admin role that can
+monitor each user's token consumption and what they're using it for.**
 **Files:** new `auth/tokens.py` (JWT issuance/verification via `PyJWT`
 — decided, added to `requirements.txt`), `auth/users.py` (add `user_id` as a
 real primary key now, from Milestone 4's schema, rather than
-username-as-identity), `interfaces/cli.py` (maps today's login to "issue a
-token for a local default user," per the product context's own instruction
-— "specify how the current CLI maps to this... so nothing needs rewriting
-later").
+username-as-identity; add a `role` field, `admin`/`user`), new
+`observability/usage_store.py` (writes one `usage_log` row per model call —
+hooked where `UsageTracker.record` already fires, so `engine/orchestrator.py`
+is untouched; the row carries `user_id`, `session_id`, `model`, token
+counts, estimated cost, and the current task text from `MemoryTracker`),
+`interfaces/cli.py` (maps today's login to "issue a token for a local
+default user," per the product context's own instruction — "specify how the
+current CLI maps to this... so nothing needs rewriting later" — plus the
+admin commands below).
 **Design decisions:** the CLI does **not** start requiring a bearer token —
 it keeps its interactive username/password prompt. What changes is that
 `_login()` returns a `(user_id, token)` pair instead of a bare username, and
@@ -276,15 +298,36 @@ paths) switches from keying on `username` to keying on `user_id` — the
 actual database primary key, not the display name — so a future server's
 token-verification middleware can hand the exact same `user_id` to the exact
 same downstream code with zero changes there. JWT claims: `sub` (user_id),
-`iat`, `exp` (a config-driven TTL, generous default since nothing enforces
-it yet), signed with a secret resolved from `Config`/env (`HARNESS_JWT_SECRET`,
-generated and persisted on first run if unset — never hardcoded). No
-password reset, no roles/permissions beyond today's single-tier account
-model — explicitly deferred (§4).
+`role`, `iat`, `exp` (a config-driven TTL, generous default since nothing
+enforces it yet), signed with a secret resolved from `Config`/env
+(`HARNESS_JWT_SECRET`, generated and persisted on first run if unset — never
+hardcoded).
+**Admin monitoring (the owner-added requirement):**
+- `role` lives on the user record; the *first* account ever created becomes
+  `admin` (the standard local-bootstrap convention), everyone after defaults
+  to `user`; an admin can promote/demote via a `/users role <name> <role>`
+  command. Non-admins cannot see or set roles.
+- Every model call is durably logged to `usage_log` (Milestone 4's table)
+  with `user_id`, `session_id`, `model`, tokens in/out, estimated cost, and
+  the task text the user gave for that turn — "what they are using it for"
+  is answered by the task column plus the per-session drill-down.
+- Admin-only CLI commands: `/usage` (all users: total tokens + cost,
+  grouped per user), `/usage <username>` (that user's sessions, each with
+  tokens/cost/last task), backed by plain queries over `usage_log` — these
+  same queries become the server phase's admin endpoints verbatim, which is
+  the point of putting them behind the storage layer now.
+- The existing per-session `/cost` command stays as-is for every user
+  (self-service view of their own current session).
+Password reset and any finer-grained permissions beyond the two-tier
+`admin`/`user` split remain explicitly deferred (§4).
 **Verification:** `tests/auth_test.py` extended with token issue/verify
 round-trip tests (valid token, expired token via a fake clock, tampered
-signature rejected); manual: confirm CLI login still works unchanged from
-the user's perspective.
+signature rejected, `role` claim present); new `tests/usage_store_test.py`
+(fake provider run writes usage_log rows keyed by the right user/session;
+admin query aggregates correctly; a non-admin invoking `/usage` is refused);
+manual: confirm CLI login still works unchanged from the user's perspective,
+and `/usage` as the first-created (admin) account shows a second account's
+consumption after running a task as them.
 
 ### Milestone 6 — Memory auto-injection + session lifecycle polish
 **Closes:** E3, remaining half of F2.
@@ -389,7 +432,10 @@ Consciously not doing these, and why:
   stated product requirement (multi-provider, multi-user, memory, storage,
   sandbox) — `DESIGN.md`'s own non-goals list already deferred this once;
   this plan doesn't re-open it.
-- **Password reset, roles/permissions per account, SSO.** F4 explicitly
+- **Password reset, SSO, and any role model finer than `admin`/`user`.**
+  The two-tier admin/user split (with admin usage monitoring) *is* in scope
+  (Milestone 5, owner-added); what stays deferred is everything beyond it —
+  per-resource permissions, groups, SSO/OIDC, password reset flows. F4
   scopes auth to "enough to map onto a future real system," not "a real
   identity provider" — matches `DESIGN.md` D22's own already-recorded scope.
 - **Parallel pipeline slices, cross-model review, pipeline auto-push/PR
@@ -422,6 +468,12 @@ Consciously not doing these, and why:
    `Config.confine_workspace` / `HARNESS_CONFINE_WORKSPACE`, default `False`
    (today's CLI is byte-for-byte unchanged by default). Becomes the expected
    default only once a server interface exists and sets it explicitly.
+5. **Admin monitoring (owner-added, after initial approval):** auth gains a
+   two-tier `admin`/`user` role model, durable per-model-call usage logging
+   (`usage_log` table: user, session, model, tokens, cost, task), and
+   admin-only `/usage` views answering "who is spending tokens, how many,
+   on what." Folded into Milestones 4 (schema) and 5 (role, commands,
+   usage store).
 
 ---
 
