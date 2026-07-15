@@ -139,16 +139,22 @@ window / max-tokens table, same shape as `observability/usage.py`'s
   pattern as `PRICING`) providing `context_window` and `default_max_tokens`;
   `build_provider` consults it to fill in `Config.max_tokens` when the user
   hasn't overridden it, instead of always using the hardcoded `4096` default.
-- `web_search` fix: remove the always-on DuckDuckGo `web_search` from
-  `engine/builtin/web.py` (keep `fetch_url` there); the Tavily tool in
-  `engine/builtin/search.py` becomes the only `web_search`, opt-in as the
-  docs already (incorrectly) claim it is today. *(See open question 1 below
-  — this is the one place this plan makes a judgment call worth confirming.)*
+- `web_search` fix (decided): merge into **one** registered `web_search`
+  tool instead of two competing registrations. `engine/builtin/search.py`
+  gains the fallback logic — if `HARNESS_SEARCH_API_KEY` is set, call
+  Tavily; otherwise fall back to the DuckDuckGo scraper currently living in
+  `engine/builtin/web.py`. `engine/builtin/web.py` stops registering
+  `web_search` itself (keeps only `fetch_url`) and exports its scraping
+  function for `search.py` to call as the fallback path. Net effect: no
+  registry collision, search still works with zero config, and quality
+  improves automatically once a Tavily key is added — no docs get
+  contradicted either way, since there's only ever one `web_search` tool.
 **Verification:** extend `tests/model_switch_test.py` with a retry-on-fake-rate-limit
-case; new `tests/model_info_test.py`; manual: run the CLI against a real key,
-confirm `/model` still reports correctly, confirm only one `web_search` tool
-appears in the startup tool list with no key set, and appears when
-`HARNESS_SEARCH_API_KEY` is set.
+case; new `tests/model_info_test.py`; extend `tests/search_test.py` to cover
+the fallback path (no key -> DuckDuckGo path exercised; key set -> Tavily
+called and DuckDuckGo not touched); manual: run the CLI against a real key,
+confirm `/model` still reports correctly, confirm exactly one `web_search`
+tool appears in the startup tool list in both configurations.
 
 ### Milestone 2 — Workspace isolation
 **Closes:** D1, D2.
@@ -169,17 +175,29 @@ helper, same shape as `context_engine/memory_tool.py`'s `_resolve`).
   subsequent tool calls (each `run_command` call is already a fresh
   subprocess, so this is a `cwd=` kwarg change, not new sandboxing — real
   isolation from the *host* is still G's job, not this milestone's).
-- Interactive CLI default: the workspace root defaults to the process's
-  actual launch directory *only when running as the single-user CLI*
-  (`Session.__init__` passes `os.getcwd()` as the root today implicitly by
-  not confining at all) — see open question 4 for how hard this confinement
-  should be enforced immediately.
+- **Rollout (decided): opt-in, not enforced by default.** A new
+  `Config.confine_workspace: bool = False` (env `HARNESS_CONFINE_WORKSPACE`).
+  When `False` (the existing CLI's default), `read_file`/`write_file`/
+  `edit_file`/`list_dir`/`run_command` behave exactly as they do today —
+  unconfined, operating on the process's real filesystem/cwd — so no current
+  user is surprised by a new restriction shipping under them. When `True`,
+  every one of those tools resolves through `engine/workspace.py` against
+  `workspaces/{user_id}/{session_id}/` and rejects anything that escapes it.
+  The flag is threaded through the same `Config`/`Orchestrator` construction
+  path Milestone 3 is already changing, so there's no extra plumbing cost —
+  and the plan is for confinement to become the *default* once a
+  client/server interface exists (this flag is exactly the seam that future
+  server code flips to `True` unconditionally for every session it creates).
 **Verification:** new `tests/workspace_test.py` mirroring
 `tests/memory_test.py`'s escape-attempt assertions (`../../etc/passwd`,
-absolute paths, symlink escape); manual: run `main.py` in a scratch
-directory, confirm `read_file`/`write_file`/`run_command` all stay confined
-and a `../`-prefixed path is rejected with a clear error string (not a
-crash — must still satisfy PRINCIPLES rule 1).
+absolute paths, symlink escape) *with `confine_workspace=True`*, plus an
+explicit assertion that `confine_workspace=False` (the default) reproduces
+today's unconfined behavior byte-for-byte — that second assertion is this
+milestone's actual regression guard. Manual: run `main.py` unchanged
+(confirm nothing is different by default), then run it with
+`HARNESS_CONFINE_WORKSPACE=true` in a scratch directory and confirm a
+`../`-prefixed path is rejected with a clear error string (not a crash —
+must still satisfy PRINCIPLES rule 1).
 
 ### Milestone 3 — Remove global state (concurrency safety)
 **Closes:** F3 (and de-risks H4's shared-plan caveat).
@@ -224,7 +242,11 @@ lays the groundwork the client/server phase needs.
 `storage/session_store.py`, `storage/user_store.py` — same public interface
 as today's `SessionStore`/`UserStore` so callers don't change), `requirements.txt`
 (add `sqlalchemy`), `context_engine/session_store.py` and `auth/users.py`
-become thin adapters or are replaced outright (open question — see below).
+become thin adapters or are replaced outright by the new `storage/` package
+(replaced outright is preferred — an adapter layer over a store that's
+switching backends anyway is extra indirection with no caller depending on
+the old module paths, per PRINCIPLES rule 8's "don't over-abstract").
+Confirmed in scope for this round (not deferred).
 **Design decisions:** see §2 above for the schema. Migration path: a
 one-time script reads existing `.harness/sessions/*.json` and
 `.harness/users.json` and inserts them into the new SQLite DB, so no one
@@ -239,9 +261,9 @@ still work post-migration.
 ### Milestone 5 — Auth scaffolding for the server phase
 **Closes:** F4 (planned-but-designed, per the product context's explicit
 allowance).
-**Files:** new `auth/tokens.py` (JWT issuance/verification, stdlib-adjacent
-via a small dependency — see open question 3), `auth/users.py` (add
-`user_id` as a real primary key now, from Milestone 4's schema, rather than
+**Files:** new `auth/tokens.py` (JWT issuance/verification via `PyJWT`
+— decided, added to `requirements.txt`), `auth/users.py` (add `user_id` as a
+real primary key now, from Milestone 4's schema, rather than
 username-as-identity), `interfaces/cli.py` (maps today's login to "issue a
 token for a local default user," per the product context's own instruction
 — "specify how the current CLI maps to this... so nothing needs rewriting
@@ -253,12 +275,16 @@ every downstream consumer (`Config.for_user`, `SessionStore`, workspace
 paths) switches from keying on `username` to keying on `user_id` — the
 actual database primary key, not the display name — so a future server's
 token-verification middleware can hand the exact same `user_id` to the exact
-same downstream code with zero changes there. No password reset, no roles/
-permissions beyond today's single-tier account model — explicitly deferred
-(§4).
+same downstream code with zero changes there. JWT claims: `sub` (user_id),
+`iat`, `exp` (a config-driven TTL, generous default since nothing enforces
+it yet), signed with a secret resolved from `Config`/env (`HARNESS_JWT_SECRET`,
+generated and persisted on first run if unset — never hardcoded). No
+password reset, no roles/permissions beyond today's single-tier account
+model — explicitly deferred (§4).
 **Verification:** `tests/auth_test.py` extended with token issue/verify
-round-trip tests (fake clock for expiry); manual: confirm CLI login still
-works unchanged from the user's perspective.
+round-trip tests (valid token, expired token via a fake clock, tampered
+signature rejected); manual: confirm CLI login still works unchanged from
+the user's perspective.
 
 ### Milestone 6 — Memory auto-injection + session lifecycle polish
 **Closes:** E3, remaining half of F2.
@@ -378,35 +404,32 @@ Consciously not doing these, and why:
 
 ---
 
-## 5. Questions needing your decision
+## 5. Decisions (resolved, owner-approved)
 
-1. **The `web_search` fix (Milestone 1):** remove the always-on DuckDuckGo
-   scraper entirely and make Tavily the only `web_search` (matching what the
-   docs already claim happens today), or keep DuckDuckGo as a distinctly-named
-   fallback tool (e.g. `web_search_free`) so search works with zero API-key
-   setup? The current docs promise the former; the current code does the
-   latter by accident. I'd default to matching the docs (remove it) unless
-   you want zero-config search kept as a real feature.
-2. **Storage migration scope (Milestone 4):** confirm SQLite-now/
-   Postgres-later, per §2 — or would you rather defer the database
-   entirely for now and only do Milestones 1-3 + 5-9 this round (i.e., fix
-   everything except storage), leaving JSON-file persistence in place a
-   while longer?
-3. **JWT library choice (Milestone 5):** stdlib has no JWT support — pulling
-   one in (e.g. `PyJWT`) is this plan's only proposed *new* dependency
-   category (auth) beyond `sqlalchemy`. OK to add it, or do you want a
-   simpler, non-JWT token scheme (e.g. opaque random tokens stored in the
-   new `sessions`/`users` DB, looked up rather than decoded) to stay
-   dependency-light, matching the project's existing bias (D3, D22's own
-   "stdlib only" choice for password hashing)?
-4. **Workspace confinement enforcement (Milestone 2):** should the
-   interactive CLI (`main.py`) start *enforcing* workspace confinement
-   immediately (a behavior change — today's users can `read_file` anywhere
-   on disk; after this, they're confined to a workspace directory), or
-   should confinement be opt-in at first (a config flag, default off for the
-   existing single-user CLI, default on for anything server-facing later) so
-   current users aren't surprised by a new restriction?
+1. **`web_search` fix (Milestone 1):** neither of the two options originally
+   proposed — merge into a single `web_search` tool that calls Tavily when
+   `HARNESS_SEARCH_API_KEY` is set and falls back to the DuckDuckGo scraper
+   otherwise. One registered tool, no collision, zero-config search
+   preserved, quality improves automatically once a key is added. Reflected
+   in Milestone 1 above.
+2. **Storage migration scope (Milestone 4):** in scope for this round.
+   SQLite now, Postgres-ready schema, `storage/` package replacing
+   `context_engine/session_store.py`/`auth/users.py` outright.
+3. **Auth token scheme (Milestone 5):** JWT via `PyJWT`. New dependency,
+   added to `requirements.txt`; claims and secret handling specified in
+   Milestone 5 above.
+4. **Workspace confinement rollout (Milestone 2):** opt-in via
+   `Config.confine_workspace` / `HARNESS_CONFINE_WORKSPACE`, default `False`
+   (today's CLI is byte-for-byte unchanged by default). Becomes the expected
+   default only once a server interface exists and sets it explicitly.
 
 ---
 
-**Waiting for your approval (with any modifications) before starting Phase 4.**
+## 6. Approved — proceeding to Phase 4
+
+All four open questions are resolved (§5) and no further modifications were
+requested. Implementation proceeds milestone-by-milestone per §3, in order,
+each with its own commit, its own test run (existing suite + new tests), and
+an `AUDIT.md` score update as items flip to ✅ — per the anti-lazy-work rules
+in the original task brief (no stubs, no claims without a run, no silent
+scope-shrinking).
