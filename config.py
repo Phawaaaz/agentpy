@@ -114,6 +114,10 @@ class Config:
     db_url: str = "sqlite:///.harness/harness.db"
     # Legacy JSON account file -- read only by scripts/migrate_json_to_db.py.
     users_config_path: str = ".harness/users.json"
+    # JWT scaffolding (D30): where the auto-generated signing secret lives
+    # when HARNESS_JWT_SECRET isn't set, and the token lifetime.
+    jwt_secret_path: str = ".harness/jwt_secret"
+    jwt_ttl_s: int = 7 * 24 * 3600
     # Tavily API key for the web_search tool; unset = DuckDuckGo fallback (D25).
     search_api_key: str | None = None
     # Workspace confinement (D27): when True, filesystem/shell tools are
@@ -196,6 +200,8 @@ class Config:
             offload_dir=get_val("HARNESS_OFFLOAD_DIR", "offload_dir", cls.offload_dir),
             db_url=get_val("HARNESS_DB_URL", "db_url", cls.db_url),
             users_config_path=get_val("HARNESS_USERS_FILE", "users_config_path", cls.users_config_path),
+            jwt_secret_path=get_val("HARNESS_JWT_SECRET_PATH", "jwt_secret_path", cls.jwt_secret_path),
+            jwt_ttl_s=get_val("HARNESS_JWT_TTL", "jwt_ttl_s", cls.jwt_ttl_s, int),
             search_api_key=get_val("HARNESS_SEARCH_API_KEY", "search_api_key", cls.search_api_key) or None,
             confine_workspace=get_val("HARNESS_CONFINE_WORKSPACE", "confine_workspace", cls.confine_workspace, to_bool),
             workspace_dir=get_val("HARNESS_WORKSPACE_DIR", "workspace_dir", cls.workspace_dir),

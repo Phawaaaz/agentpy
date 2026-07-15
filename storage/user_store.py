@@ -11,7 +11,7 @@ produce and verify the hash/salt pair, so accounts migrated from
 
 import re
 
-from sqlalchemy import Engine, select
+from sqlalchemy import Engine, func, select
 from sqlalchemy.orm import Session as OrmSession
 
 from auth.users import hash_password, verify_password
@@ -77,3 +77,26 @@ class DbUserStore:
     def list_usernames(self) -> list[str]:
         with OrmSession(self.engine) as db:
             return sorted(db.scalars(select(User.username)))
+
+    def list_users(self) -> list[tuple[str, str]]:
+        """(username, role) pairs, sorted by username -- the /users listing."""
+        with OrmSession(self.engine) as db:
+            return sorted(db.execute(select(User.username, User.role)).all())
+
+    def set_role(self, username: str, role: str) -> None:
+        """Promote/demote an account. Refuses to demote the last admin --
+        an installation with zero admins can never manage roles again."""
+        if role not in (ROLE_ADMIN, ROLE_USER):
+            raise ValueError(f"role must be '{ROLE_ADMIN}' or '{ROLE_USER}', got {role!r}")
+        with OrmSession(self.engine) as db:
+            user = db.scalar(select(User).where(User.username == username))
+            if user is None:
+                raise ValueError(f"no such user '{username}'")
+            if user.role == ROLE_ADMIN and role == ROLE_USER:
+                admins = db.scalar(
+                    select(func.count()).select_from(User).where(User.role == ROLE_ADMIN)
+                )
+                if admins <= 1:
+                    raise ValueError("cannot demote the last admin")
+            user.role = role
+            db.commit()

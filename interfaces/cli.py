@@ -11,6 +11,7 @@ import os
 from dataclasses import replace
 from datetime import datetime
 
+from auth.tokens import issue_token, load_or_create_secret, verify_token
 from config import Config
 from context_engine.compaction import Conversation, make_provider_summarizer
 from context_engine.memory_tracker import MemoryTracker
@@ -21,12 +22,14 @@ from multiagent.coordinator import build_delegate_tool
 from multiagent.roles import load_roles
 from observability.log import EventLogger
 from observability.usage import UsageTracker
+from observability.usage_store import PersistentUsageTracker, usage_by_user, usage_for_user
 from pipeline import stages, worktree
 from pipeline.external_skills import load_external_skills
 from providers.base import ToolCall
 from providers.factory import OPENAI_COMPATIBLE, build_provider
 from providers.model_info import effective_context_budget
 from storage.db import make_engine
+from storage.models import ROLE_ADMIN
 from storage.session_store import DbSessionStore
 from storage.user_store import DbUserStore
 
@@ -52,7 +55,10 @@ HELP = """commands:
   /memory              show what the harness has been working on
   /model               show the current model
   /model <name>        switch model mid-session (conversation history kept)
-  /whoami              show the logged-in user
+  /whoami              show the logged-in user and role
+  /usage [username]    admin only: token/cost usage per user (or one user's sessions)
+  /users               admin only: list accounts and roles
+  /users role <u> <r>  admin only: promote/demote an account (admin|user)
   /mcp                 list connected MCP servers and their tools
   /mcp connect <name>  connect a server from the MCP config file
   /mcp disconnect <n>  disconnect a server and remove its tools
@@ -133,12 +139,21 @@ def _make_event_handler(*listeners):
 class Session:
     """Bundles the mutable per-session objects the CLI juggles."""
 
-    def __init__(self, config: Config, provider, on_event, username: str = ""):
+    def __init__(
+        self,
+        config: Config,
+        provider,
+        on_event,
+        username: str = "",
+        role: str = "",
+        usage_tracker: UsageTracker | None = None,
+    ):
         self.config = config
         self.provider = provider
         self.on_event = on_event
         self.username = username
-        self.usage = UsageTracker()
+        self.role = role
+        self.usage = usage_tracker or UsageTracker()
         self.id = datetime.now().strftime("%Y%m%d-%H%M%S")
         self.conversation = self._new_conversation()
         self.agent = self._new_agent()
@@ -289,6 +304,58 @@ def _handle_skill_command(
     store.save(session.id, session.conversation)
 
 
+def _handle_usage_command(args: list[str], session: Session, db_engine) -> None:
+    """Admin-only: /usage (all users) or /usage <username> (drill-down).
+    These queries are exactly what a server's admin endpoints would serve."""
+    if session.role != ROLE_ADMIN:
+        print("only an admin can view usage across users (your own session: /cost)")
+        return
+    if not args:
+        rows = usage_by_user(db_engine)
+        if not rows:
+            print("(no usage recorded yet)")
+            return
+        for r in rows:
+            total = r["prompt_tokens"] + r["completion_tokens"]
+            print(
+                f"  {r['username']}: {r['calls']} calls | "
+                f"{r['prompt_tokens']} in + {r['completion_tokens']} out = {total} tokens | "
+                f"est. ${r['cost_usd']:.4f}"
+            )
+        return
+    rows = usage_for_user(db_engine, args[0])
+    if not rows:
+        print(f"(no usage recorded for '{args[0]}')")
+        return
+    for r in rows:
+        total = r["prompt_tokens"] + r["completion_tokens"]
+        print(
+            f"  session {r['session_id']}: {r['calls']} calls | {total} tokens | "
+            f"est. ${r['cost_usd']:.4f}\n"
+            f"    last task: {r['last_task']}"
+        )
+
+
+def _handle_users_command(args: list[str], session: Session, user_store: DbUserStore) -> None:
+    """Admin-only: /users (list accounts + roles) or /users role <name> <role>."""
+    if session.role != ROLE_ADMIN:
+        print("only an admin can manage users")
+        return
+    if not args:
+        for username, role in user_store.list_users():
+            print(f"  {username}: {role}")
+        return
+    if args[0] == "role" and len(args) == 3:
+        try:
+            user_store.set_role(args[1], args[2])
+        except ValueError as exc:
+            print(f"  {exc}")
+            return
+        print(f"  {args[1]} is now {args[2]}")
+        return
+    print("usage: /users | /users role <name> <admin|user>")
+
+
 def _handle_command(
     text: str,
     session: Session,
@@ -297,6 +364,8 @@ def _handle_command(
     memory_tracker: MemoryTracker,
     roles: dict,
     skills: dict,
+    user_store: DbUserStore | None = None,
+    db_engine=None,
 ) -> bool:
     """Handle a /command. Returns True if input was a command (handled)."""
     if not text.startswith("/"):
@@ -344,7 +413,12 @@ def _handle_command(
     elif cmd == "/model":
         _handle_model_command(args, session)
     elif cmd == "/whoami":
-        print(session.username or "(not logged in)")
+        who = session.username or "(not logged in)"
+        print(f"{who} ({session.role})" if session.role else who)
+    elif cmd == "/usage":
+        _handle_usage_command(args, session, db_engine)
+    elif cmd == "/users":
+        _handle_users_command(args, session, user_store)
     elif cmd == "/mcp":
         _handle_mcp_command(args, mcp_manager, session.config)
     elif cmd == "/roles":
@@ -422,6 +496,16 @@ def main() -> None:
     user_store = DbUserStore(db_engine)
     username = _login(user_store)
     user_id = user_store.user_id(username)
+    role = user_store.role(username) or ""
+
+    # Token scaffolding (D30): issue a JWT for this login and verify it
+    # immediately -- the same round trip a server's per-request middleware
+    # will run. The CLI doesn't require the token afterwards (one process,
+    # one login), but the path is exercised on every start, so it can't rot.
+    secret = load_or_create_secret(config.jwt_secret_path)
+    claims = verify_token(issue_token(user_id, role, secret, config.jwt_ttl_s), secret)
+    assert claims == {"user_id": user_id, "role": role}  # setup error if not (fail loud)
+
     config = config.for_user(username)
     provider = build_provider(config)
     run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -459,7 +543,19 @@ def main() -> None:
     # -- D25).
     registry.register(build_search_tool(config.search_api_key))
 
-    session = Session(config, provider, on_event, username=username)
+    # Durable usage accounting (D30): every model call becomes one
+    # usage_log row attributed to this user, the session id current at
+    # call time, and the task the user gave -- what /usage aggregates.
+    usage_tracker = PersistentUsageTracker(
+        db_engine,
+        user_id,
+        session_id_fn=lambda: session.id,
+        task_fn=lambda: memory_tracker.task,
+    )
+    session = Session(
+        config, provider, on_event,
+        username=username, role=role, usage_tracker=usage_tracker,
+    )
     store = DbSessionStore(db_engine, user_id)
     mcp_manager = MCPManager(registry)
 
@@ -489,7 +585,10 @@ def main() -> None:
             if user_input.lower() in ("quit", "exit", "q"):
                 print("bye")
                 return
-            if _handle_command(user_input, session, store, mcp_manager, memory_tracker, roles, skills):
+            if _handle_command(
+                user_input, session, store, mcp_manager, memory_tracker,
+                roles, skills, user_store=user_store, db_engine=db_engine,
+            ):
                 continue
 
             memory_tracker.set_task(user_input)

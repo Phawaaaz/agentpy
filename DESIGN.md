@@ -708,6 +708,37 @@ hand-writing two dialects of SQL for a schema this small is worse), and
 SQLite remains single-writer; the Postgres URL swap is the documented
 answer once a concurrent server process exists.
 
+### D30 — Auth scaffolding (JWT) + admin usage monitoring
+**Decision:** two additions that together make the harness
+server-auth-ready and give the owner the requested admin oversight:
+- `auth/tokens.py` (PyJWT): `issue_token`/`verify_token` with `sub` =
+  integer user_id, `role`, `iat`, `exp` (config TTL, default 7 days),
+  signed by `HARNESS_JWT_SECRET` or an auto-generated secret persisted
+  0600 at `.harness/jwt_secret`. The CLI issues **and immediately
+  verifies** a token on every login — it doesn't need the token yet (one
+  process, one login), but exercising the exact round trip a server's
+  per-request middleware will run means the path can't rot, and the
+  claims carry precisely what downstream code is keyed by.
+- `observability/usage_store.py`: `PersistentUsageTracker` extends the
+  in-memory `UsageTracker` (which still powers `/cost` unchanged) to
+  insert one `usage_log` row per model call — user, session id and task
+  text *current at call time* (injected as callables, since both change
+  over a run), model, tokens, estimated cost. Inserts are best-effort
+  (accounting must never break a run, same rule as EventLogger). The
+  admin-only `/usage` (per-user totals) and `/usage <username>`
+  (per-session drill-down with last task) print the aggregation queries a
+  server's admin endpoints would serve verbatim; `/users` and
+  `/users role <name> <admin|user>` manage the two-tier role model, with
+  the last admin protected from demotion.
+**Why JWT over opaque DB tokens:** the owner's explicit choice (PLAN.md
+§5.3) — self-contained tokens a stateless server middleware can verify
+without a DB read; PyJWT is the accepted new dependency.
+**Trade-off:** the token is scaffolding, not yet a boundary — nothing in
+the CLI *requires* it after login, and role checks gate CLI commands, not
+storage APIs (a Python caller with the engine can query anything;
+process-level trust is unchanged from D22). The boundary becomes real in
+the server phase, which is exactly what this shape was built for.
+
 ---
 
 ## Known limitations & future work

@@ -194,7 +194,10 @@ Inside the CLI, lines starting with `/` are commands (everything else is a task)
 | `/memory` | Show what the harness has been working on |
 | `/model` | Show the current model |
 | `/model <name>` | Switch model mid-session, e.g. `/model ollama/llama3.2:3b` (conversation history kept) |
-| `/whoami` | Show the logged-in user |
+| `/whoami` | Show the logged-in user and role |
+| `/usage [username]` | Admin only: token/cost usage per user, or one user's sessions + tasks |
+| `/users` | Admin only: list accounts and roles |
+| `/users role <u> <r>` | Admin only: promote/demote an account |
 | `/review`, `/verify`, `/test`, `/docs` | Run a pipeline stage's prompt on demand (skills) |
 | `/roles` | List configured sub-agent roles (`delegate` target) |
 | `/help` | List commands |
@@ -217,6 +220,18 @@ historically works directly in whatever directory you launch it from, and
 that stays the default. This is a path boundary, not a sandbox — commands
 inside the workspace can still run anything on PATH (host isolation is the
 planned sandbox's job).
+
+## Admin monitoring
+
+The first account ever created becomes the **admin**; everyone after is a
+regular user (an admin can promote/demote with `/users role <name>
+<admin|user>` — the last admin can't be demoted). Every model call is
+durably logged (user, session, model, tokens, estimated cost, and the task
+text), so an admin can answer "who is spending tokens, and on what":
+`/usage` shows per-user totals, `/usage <username>` shows that user's
+sessions with their last task. Regular users still see their own session's
+`/cost`. On login the CLI also issues and verifies a JWT (see DESIGN.md
+D30) — scaffolding the future server's per-request auth will reuse as-is.
 
 ## Permission modes (set `HARNESS_PERMISSION_MODE` in `.env`)
 
@@ -248,6 +263,8 @@ python tests/config_yaml_test.py    # .harness.yaml config + pipeline auto-push/
 python tests/workspace_test.py      # opt-in workspace confinement (D27)
 python tests/concurrency_test.py    # two sessions, zero state leakage (D28)
 python tests/storage_test.py        # DB users/sessions, isolation, JSON->DB migration (D29)
+python tests/token_test.py          # JWT issue/verify/expiry/tamper (D30)
+python tests/usage_store_test.py    # durable usage rows + admin gating (D30)
 ```
 
-All nineteen run against fakes — no key, no network — and should print `... PASSED`.
+All twenty-one run against fakes — no key, no network — and should print `... PASSED`.

@@ -368,18 +368,25 @@ a tool-scoping question for the server phase, not a state-corruption one
 (no session can corrupt another's data through it, which is what this item
 measures).
 
-**F4. Auth design (may be deferred, but must be planned).** 🟡 **Partial,
-explicitly and honestly self-scoped in DESIGN.md.** Real hashing (PBKDF2-HMAC-SHA256,
-200k iterations, random salt, `auth/users.py`) — genuinely not plaintext.
-**No token issuance (JWT or otherwise), no session expiry, no token
-verification** — `_login()` (`interfaces/cli.py:343`) returns a bare
-username string, consumed once at process startup; there is no per-request
-identity check because there are no requests, only one long-lived login. This
-is fine for a CLI and is explicitly called out as not-a-security-boundary in
-`DESIGN.md` D22's own trade-off section — but the *mapping* from "current CLI
-user" to "future request-scoped token subject" does not exist yet even as a
-sketch; `main()` calling `_login()` once and threading a plain string through
-is the entire design.
+**F4. Auth design (may be deferred, but must be planned).**
+✅ **Implemented as scaffolding** (Milestone 5, D30) — the full boundary
+arrives with the server, by design. What exists and runs today: PBKDF2
+hashing (unchanged, `auth/users.py`), integer `user_id` primary keys and a
+two-tier `admin`/`user` role in the database (first account bootstraps as
+admin, `/users role` promotes/demotes with last-admin protection), and JWT
+issuance + verification (`auth/tokens.py`, PyJWT — `sub`=user_id, `role`,
+`exp`; secret from `HARNESS_JWT_SECRET` or auto-generated 0600 at
+`.harness/jwt_secret`). The CLI exercises the exact issue→verify round
+trip a server's per-request middleware will run, on every login, so the
+path can't rot. Plus the owner-added admin monitoring: every model call
+writes a durable `usage_log` row (user, session, model, tokens, cost, task
+— `observability/usage_store.py`), served by admin-only `/usage` and
+`/usage <username>` commands whose queries become the server's admin
+endpoints verbatim. Verified by `tests/token_test.py` and
+`tests/usage_store_test.py`, plus a live two-account CLI run (first
+account admin, second refused `/usage`). Deliberately still open for the
+server phase: nothing *requires* a token per-request yet (one process, one
+login), and role checks gate CLI commands, not storage APIs.
 
 ### G. Sandbox
 
@@ -511,11 +518,11 @@ initial audit.
 | C. Tools/Execution/MCP (6) | **5** | 1 | 0 | 0 |
 | D. Filesystem & Workspace (3) | **2** | 1 | 0 | 0 |
 | E. Memory (3) | 2 | 1 | 0 | 0 |
-| F. Sessions/Multi-user/Auth (4) | **2** | 2 | 0 | 0 |
+| F. Sessions/Multi-user/Auth (4) | **3** | 1 | 0 | 0 |
 | G. Sandbox (1) | 0 | 0 | 1 | 0 |
 | H. Long-Horizon (5) | 3 | 1 | 1 | 0 |
 | I. Observability/Config (3) | 1 | 2 | 0 | 0 |
-| **Total (35 items)** | **21** | **11** | **3** | **0** |
+| **Total (35 items)** | **22** | **10** | **3** | **0** |
 
 Milestone 1 (model layer hardening) flipped A4 ❌→✅, A5 🟡→✅, and C4
 🟡→✅ (the `web_search` collision bug, resolved as one tool with a
@@ -526,7 +533,10 @@ CLI). Milestone 3 (global-state removal, D28) flipped F3 ❌→✅ via
 ContextVars and removed H4's shared-plan caveat. Milestone 4 (storage,
 D29) flipped F2 🟡→✅: users/sessions in a relational store behind
 `HARNESS_DB_URL` (SQLite default, Postgres-ready), `/delete` added, JSON
-data migrated by `scripts/migrate_json_to_db.py`.
+data migrated by `scripts/migrate_json_to_db.py`. Milestone 5 (auth
+scaffolding + admin monitoring, D30) flipped F4 🟡→✅: JWT
+issue/verify at login, admin/user roles, durable per-call usage logging
+with admin-only `/usage`/`/users` views.
 
 Nothing was scored 🔵 deliberately-deferred at the item level — every gap
 found is either a real fix-now bug (the `web_search` collision), a design
