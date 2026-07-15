@@ -342,32 +342,27 @@ missing** — `SessionStore` has no `delete`/`remove` method and there is no
 `/delete` command; old sessions accumulate forever with no cleanup path.
 
 **F3. Concurrency: two sessions don't corrupt each other's state.**
-❌ **Missing at the architecture level** (harmless today only because the
-CLI is a single-threaded, single-user-at-a-time REPL). Three module-level
-globals are shared by *every* `Orchestrator` in the process regardless of
-which user or session it belongs to:
-- `engine/builtin/planning.py:_plan` — one plan for the whole process (already
-  flagged as a known limitation in `DESIGN.md` D23, but scoped there only to
-  "a delegate sub-agent sees the coordinator's plan" — the real blast radius
-  is any two concurrent agents in one process, which is exactly the shape a
-  client/server interface will have).
-- `context_engine/memory_tool.py:_ROOT` — set once via `set_memory_root()`
-  at CLI startup (`interfaces/cli.py:402`); a second concurrent user's memory
-  calls would resolve against the *first* user's root.
-- `engine/builtin/offload.py:_ROOT` — same pattern
-  (`interfaces/cli.py:403`), same problem.
+✅ **Implemented** (Milestone 3, D28). The module-level globals the audit
+originally flagged — `engine/builtin/planning.py:_plan`,
+`context_engine/memory_tool.py:_ROOT`, `engine/builtin/offload.py:_ROOT`,
+plus D27's `engine/workspace.py:_ROOT` — are now `contextvars.ContextVar`s:
+each execution context (one thread per session, the shape a server gives
+each request; or a copied context for a delegated sub-agent) sees its own
+values, with the `set_*` APIs unchanged and the single-threaded CLI
+behaviorally identical. Delegated sub-agents additionally run in
+`contextvars.copy_context()` with a fresh plan, closing D23's recorded
+shared-plan limitation. Verified by `tests/concurrency_test.py` — two
+interleaved threaded sessions with distinct memory/offload/workspace roots
+and plans, asserting zero cross-leakage (this test could not pass before
+the change), plus a copied-context test proving plan isolation with
+memory-root sharing (D17's intentional design).
 
-Additionally, `engine.registry.registry` (`engine/registry.py:67`) is one
-process-wide `Registry` — an MCP server one user connects via `/mcp connect`,
-or the `delegate`/`web_search` tools registered at startup, become globally
-visible and callable by *every* user's agent in the same process, not scoped
-to the session that requested them. **This is the architecture's single
-biggest blocker to the stated "must be ready for a client/server interface"
-requirement** — every consumer of these globals needs to become a
-constructor parameter on `Orchestrator` (or session-scoped instances need to
-be built per-request) before concurrent multi-user serving is safe. Today's
-CLI never exercises this path (one login, one REPL, one process lifetime),
-which is exactly why it hasn't surfaced as a bug yet.
+One related, deliberately-unfixed item stays open under F1:
+`engine.registry.registry` is still one process-wide `Registry`, so an MCP
+server one session connects is *visible* to every session in the process —
+a tool-scoping question for the server phase, not a state-corruption one
+(no session can corrupt another's data through it, which is what this item
+measures).
 
 **F4. Auth design (may be deferred, but must be planned).** 🟡 **Partial,
 explicitly and honestly self-scoped in DESIGN.md.** Real hashing (PBKDF2-HMAC-SHA256,
@@ -423,16 +418,15 @@ relies on compaction (B3), which is the right tool for its different
 shape (one long session vs. many bounded autonomous iterations) — this is a
 considered design choice (`DESIGN.md` D15), not an oversight.
 
-**H4. Subagent spawning with isolated context.** ✅ **Implemented, with the
-F3 caveat.** `multiagent/coordinator.py`'s `delegate` tool: fresh
-`Orchestrator`, fresh `Conversation`, role-specific system prompt,
-`FilteredRegistry` hiding `delegate` itself (structural one-level limit).
-Verified by `tests/multiagent_test.py` including a "sub-agent cannot
-recursively delegate" assertion. Context is isolated (own `Conversation`
-object) but **plan state is not** (shares the global `_plan`, per F3/D23) and
-neither is memory root (shared by design — `DESIGN.md` D17 calls this out
-explicitly and intentionally, "two agents sharing memory is simply two
-`Orchestrator`s pointed at the same directory").
+**H4. Subagent spawning with isolated context.** ✅ **Implemented** (F3
+caveat resolved by Milestone 3/D28). `multiagent/coordinator.py`'s
+`delegate` tool: fresh `Orchestrator`, fresh `Conversation`, role-specific
+system prompt, `FilteredRegistry` hiding `delegate` itself (structural
+one-level limit), and — since D28 — a copied execution context with a fresh
+plan, so a sub-agent can no longer overwrite the coordinator's checklist.
+Memory root remains shared by design (`DESIGN.md` D17). Verified by
+`tests/multiagent_test.py` and `tests/concurrency_test.py`'s
+copied-context case.
 
 **H5. Hooks/middleware (pre/post tool-call, pre/post model-call).**
 ❌ **Missing as a general mechanism.** What exists: `on_event` (`EventHook`,
@@ -513,18 +507,19 @@ initial audit.
 | C. Tools/Execution/MCP (6) | **5** | 1 | 0 | 0 |
 | D. Filesystem & Workspace (3) | **2** | 1 | 0 | 0 |
 | E. Memory (3) | 2 | 1 | 0 | 0 |
-| F. Sessions/Multi-user/Auth (4) | 0 | 3 | 1 | 0 |
+| F. Sessions/Multi-user/Auth (4) | **1** | 3 | 0 | 0 |
 | G. Sandbox (1) | 0 | 0 | 1 | 0 |
 | H. Long-Horizon (5) | 3 | 1 | 1 | 0 |
 | I. Observability/Config (3) | 1 | 2 | 0 | 0 |
-| **Total (35 items)** | **19** | **12** | **4** | **0** |
+| **Total (35 items)** | **20** | **12** | **3** | **0** |
 
 Milestone 1 (model layer hardening) flipped A4 ❌→✅, A5 🟡→✅, and C4
 🟡→✅ (the `web_search` collision bug, resolved as one tool with a
 key-gated Tavily/DuckDuckGo backend split — D25/D26). Milestone 2
 (workspace isolation, D27) flipped D1 ❌→✅ and D2 ❌→✅ (opt-in
 confinement per the owner's rollout decision; default off for the local
-CLI).
+CLI). Milestone 3 (global-state removal, D28) flipped F3 ❌→✅ via
+ContextVars and removed H4's shared-plan caveat.
 
 Nothing was scored 🔵 deliberately-deferred at the item level — every gap
 found is either a real fix-now bug (the `web_search` collision), a design

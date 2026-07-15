@@ -10,29 +10,32 @@ anything that escapes it -- the same whitelist-the-untrusted-path
 protection context_engine/memory_tool.py has always applied to memory
 files, now shared here so the two confinement implementations can't drift.
 
-The module-level root is the same deliberate, startup-set global pattern as
-memory_tool.set_memory_root and offload.set_offload_root -- all three are
-scheduled to become session-scoped together (PLAN.md Milestone 3).
+The root is a ContextVar, not a module global (D28): each execution context
+-- a thread serving one session, or a copied context running a delegated
+sub-agent -- sees its own value, so two concurrent sessions in one process
+cannot see or corrupt each other's confinement root. In the single-threaded
+CLI this behaves exactly like the old startup-set global.
 """
 
 import os
+from contextvars import ContextVar
 
-_ROOT: str | None = None  # None = unconfined (the historical behavior)
+_ROOT: ContextVar[str | None] = ContextVar("workspace_root", default=None)
 
 
 def set_workspace_root(path: str | None) -> None:
     """Confine filesystem/shell tools to `path` (created if missing), or
     lift confinement with None. Called by the interface at session start
-    and whenever the session id changes (/new, /load)."""
-    global _ROOT
+    and whenever the session id changes (/new, /load). Applies to the
+    current execution context only (D28)."""
     if path is not None:
         os.makedirs(path, exist_ok=True)
-    _ROOT = path
+    _ROOT.set(path)
 
 
 def workspace_root() -> str | None:
-    """The current confinement root, or None when unconfined."""
-    return _ROOT
+    """The current context's confinement root, or None when unconfined."""
+    return _ROOT.get()
 
 
 def confine(root: str, path: str, treat_absolute_as_relative: bool = False) -> str:
@@ -55,6 +58,7 @@ def resolve(path: str) -> str:
     """Confine `path` to the active workspace root, or return it unchanged
     when no root is set. Raises ValueError on escape (tool handlers catch
     it and return an error string, per PRINCIPLES rule 1)."""
-    if _ROOT is None:
+    root = _ROOT.get()
+    if root is None:
         return path
-    return confine(_ROOT, path)
+    return confine(root, path)

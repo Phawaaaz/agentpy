@@ -15,10 +15,12 @@ so recursion is structurally impossible rather than something a runtime
 counter has to catch.
 """
 
+import contextvars
 from dataclasses import replace
 
 from config import Config
 from context_engine.compaction import Conversation, make_provider_summarizer
+from engine.builtin.planning import reset_plan
 from engine.orchestrator import Approver, EventHook, Orchestrator
 from engine.registry import Registry, Tool
 from multiagent.roles import AgentRole
@@ -87,8 +89,17 @@ def build_delegate_tool(
             on_event=on_event,
             conversation=sub_conversation,
         )
-        try:
+        def run_isolated() -> str:
+            # Fresh plan for the sub-agent; because this runs in a *copied*
+            # context (D28), the coordinator's own todo_write/todo_read
+            # state is untouched -- closing D23's known shared-plan
+            # limitation. Memory/offload/workspace roots are inherited from
+            # the copy, so memory stays shared by design (D17).
+            reset_plan()
             return sub_agent.run(task)
+
+        try:
+            return contextvars.copy_context().run(run_isolated)
         except Exception as exc:
             return f"Error: sub-agent '{role}' failed: {exc}"
 

@@ -643,6 +643,37 @@ the host itself (`run_command` inside the workspace can still call
 anything on PATH — real host isolation is the sandbox's job, G1, designed
 in a later milestone). Recorded so nobody mistakes this for a sandbox.
 
+### D28 — Session-scoped state via ContextVars, not per-session tool closures
+**Decision:** the four pieces of module-level mutable state the audit
+flagged as multi-user blockers (AUDIT.md F3) — `context_engine/memory_tool.py`'s
+root, `engine/builtin/offload.py`'s root, `engine/workspace.py`'s root
+(added in D27), and `engine/builtin/planning.py`'s plan — are now
+`contextvars.ContextVar`s instead of plain globals. The `set_*` APIs are
+unchanged; they now write to the calling execution context. A thread (the
+shape a future server gives each session) automatically gets its own
+values; `multiagent/coordinator.py` runs each delegated sub-agent via
+`contextvars.copy_context().run(...)` with a fresh plan, which closes
+D23's recorded "sub-agents share the coordinator's plan" limitation
+structurally while leaving memory shared by design (D17).
+**Why ContextVars instead of the per-session tool-closure registry the
+plan sketched (PLAN.md Milestone 3):** closures would have required every
+session to assemble its own `Registry` and every root-consuming tool to
+be rebuilt per session — a large structural change touching registration
+everywhere. ContextVars achieve the same isolation with zero changes to
+tool handler signatures, zero changes to registration, identical
+single-threaded CLI behavior, and stdlib-only semantics that are also
+correct under asyncio (relevant for a future server). Deviation from the
+written plan, recorded here per PRINCIPLES rule 0.
+**What this does not fix:** the shared `registry` singleton's *visibility*
+(an MCP server one session connects is callable by every session in the
+process, D8/D14) — that is a tool-scoping question, not a state-corruption
+one, and is deferred to the server-phase work recorded in AUDIT.md F1.
+**Trade-off:** ContextVar state is invisible to code that doesn't know to
+look for it — a reader grepping for globals won't find the mutation the
+way an assignment to `_ROOT` used to show. Mitigated by keeping the same
+`set_*` entry points and documenting the pattern here and in each module's
+docstring.
+
 ---
 
 ## Known limitations & future work
@@ -667,9 +698,9 @@ in a later milestone). Recorded so nobody mistakes this for a sandbox.
   exists, but the key-less DuckDuckGo fallback can hit bot detection or
   return empty results; set `HARNESS_SEARCH_API_KEY` for the reliable
   Tavily path.
-- **The planning tool's state isn't sub-agent-scoped:** see D23's trade-off
-  — a `delegate`-spawned sub-agent shares the coordinator's `todo_write`/
-  `todo_read` state, since `FilteredRegistry` only hides `delegate` itself.
+- ~~**The planning tool's state isn't sub-agent-scoped**~~ — fixed by D28:
+  sub-agents run in a copied context with a fresh plan; the coordinator's
+  checklist can no longer be overwritten by a delegated sub-agent.
 - **Pipeline runs one slice at a time:** no parallel worktrees yet. Real
   parallelism needs separate OS processes (not just threads, since `_cwd`
   chdir is process-global) — a bigger step, left for a follow-up.

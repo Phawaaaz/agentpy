@@ -240,6 +240,8 @@ python tests/search_test.py         # web_search: Tavily + DuckDuckGo fallback, 
 python tests/retry_test.py          # transient-error retry/backoff + FallbackProvider
 python tests/model_info_test.py     # per-model window/output limits, factory wiring
 python tests/config_yaml_test.py    # .harness.yaml config + pipeline auto-push/PR
+python tests/workspace_test.py      # opt-in workspace confinement (D27)
+python tests/concurrency_test.py    # two sessions, zero state leakage (D28)
 ```
 
-All sixteen run against fakes — no key, no network — and should print `... PASSED`.
+All eighteen run against fakes — no key, no network — and should print `... PASSED`.

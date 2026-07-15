@@ -4,26 +4,39 @@ reasoning -- closes the "planning and decomposition" gap from
 https://www.langchain.com/blog/the-anatomy-of-an-agent-harness.
 
 In-memory only (not persisted -- the `memory` tool is for anything that
-needs to survive a restart): one plan per process, reset at the start of a
-new conversation via `reset_plan()` (interfaces/cli.py calls this from
-Session.reset() and after /load).
+needs to survive a restart): one plan per *execution context* (D28) --
+a ContextVar, so concurrent sessions each hold their own plan, and a
+delegated sub-agent running in a copied context (multiagent/coordinator.py)
+gets a fresh plan that never overwrites the coordinator's. Reset at the
+start of a new conversation via `reset_plan()` (interfaces/cli.py calls
+this from Session.reset() and after /load).
 """
+
+from contextvars import ContextVar
 
 from ..registry import Tool, registry
 
 _STATUSES = ("pending", "in_progress", "completed")
-_plan: list[dict] = []  # [{"step": str, "status": str}]
+# The current context's plan. The default is None (not a shared mutable
+# list -- a ContextVar default is one object shared by every context that
+# never set it); writers always .set() a fresh list.
+_plan: ContextVar[list[dict] | None] = ContextVar("plan", default=None)
 
 
 def reset_plan() -> None:
-    _plan.clear()
+    _plan.set([])
+
+
+def _current() -> list[dict]:
+    return _plan.get() or []
 
 
 def _render() -> str:
-    if not _plan:
+    plan = _current()
+    if not plan:
         return "(no plan set)"
     marks = {"pending": "[ ]", "in_progress": "[~]", "completed": "[x]"}
-    return "\n".join(f"{i}. {marks[item['status']]} {item['step']}" for i, item in enumerate(_plan, 1))
+    return "\n".join(f"{i}. {marks[item['status']]} {item['step']}" for i, item in enumerate(plan, 1))
 
 
 def todo_write(steps: list[dict]) -> str:
@@ -37,7 +50,7 @@ def todo_write(steps: list[dict]) -> str:
         if status not in _STATUSES:
             return f"Error: status must be one of {_STATUSES}, got {status!r}"
         validated.append({"step": str(item["step"]), "status": status})
-    _plan[:] = validated
+    _plan.set(validated)
     return "Plan updated:\n" + _render()
 
 

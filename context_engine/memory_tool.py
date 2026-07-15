@@ -13,25 +13,28 @@ path-traversal protection a text-editor tool needs for untrusted model input.
 """
 
 import os
+from contextvars import ContextVar
 
 from engine.builtin.offload import maybe_offload
 from engine.registry import Tool, registry
 from engine.workspace import confine
 
 _MAX_OUTPUT = 20_000
-_ROOT = ".harness/memory"
+_ROOT: ContextVar[str] = ContextVar("memory_root", default=".harness/memory")
 
 
 def set_memory_root(path: str) -> None:
     """Point the memory tool at a different directory (default: .harness/memory).
 
-    Called once at startup by the interface, so it stays in sync with
+    Called at startup by the interface, so it stays in sync with
     Config.memory_dir / MemoryTracker without tool modules taking runtime
     config injected through their handler signatures (which would break the
     plain `(**kwargs) -> str` handler contract every other tool follows).
+    A ContextVar, not a global (D28): each session's execution context sees
+    its own memory root, so one user's agent can never resolve into
+    another's memory directory.
     """
-    global _ROOT
-    _ROOT = path
+    _ROOT.set(path)
 
 
 def _resolve(path: str) -> str:
@@ -40,7 +43,7 @@ def _resolve(path: str) -> str:
     engine/workspace.py's confinement logic (D27) so the memory tool's and
     the workspace's traversal protection can't drift apart."""
     try:
-        return confine(_ROOT, path, treat_absolute_as_relative=True)
+        return confine(_ROOT.get(), path, treat_absolute_as_relative=True)
     except ValueError:
         raise ValueError(f"path '{path}' escapes the memory directory") from None
 
