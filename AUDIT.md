@@ -319,15 +319,14 @@ per-session) by `Config.for_user` — so it correctly persists *across*
 sessions for the same user, per the product requirement. Verified by
 `tests/memory_test.py`.
 
-**E3. Memory injection at session start.** 🟡 **Partial.** The system
-prompt *instructs* the model to check memory near the start of a task
-(`config.py:44-48`, part of `DEFAULT_SYSTEM_PROMPT`), but nothing
-**automatically loads** memory content into context at startup — it is
-entirely dependent on the model choosing to call the `memory` tool with a
-`view` command on its own initiative. If it doesn't, prior memory is
-invisible for that turn. This is weaker than the product requirement
-("relevant long-term memory is loaded into the system prompt/context at
-startup").
+**E3. Memory injection at session start.** ✅ **Implemented** (Milestone
+6, D31). `memory_overview` builds a capped (2k chars) digest of the user's
+memory directory and `Session._new_conversation` injects it into the
+system prompt whenever it's non-empty — prior sessions' notes are in front
+of the model from turn one, with the memory tool still the path to read
+more or update. Verified by two new `tests/memory_test.py` cases (digest
+content/subdirs/cap; injection present with seeded memory, absent with
+empty memory) and a live seeded-note CLI run.
 
 ### F. Session Management, Multi-User & Auth
 
@@ -517,12 +516,12 @@ initial audit.
 | B. Context Engine (5) | 3 | 2 | 0 | 0 |
 | C. Tools/Execution/MCP (6) | **5** | 1 | 0 | 0 |
 | D. Filesystem & Workspace (3) | **2** | 1 | 0 | 0 |
-| E. Memory (3) | 2 | 1 | 0 | 0 |
+| E. Memory (3) | **3** | 0 | 0 | 0 |
 | F. Sessions/Multi-user/Auth (4) | **3** | 1 | 0 | 0 |
 | G. Sandbox (1) | 0 | 0 | 1 | 0 |
 | H. Long-Horizon (5) | 3 | 1 | 1 | 0 |
 | I. Observability/Config (3) | 1 | 2 | 0 | 0 |
-| **Total (35 items)** | **22** | **10** | **3** | **0** |
+| **Total (35 items)** | **23** | **9** | **3** | **0** |
 
 Milestone 1 (model layer hardening) flipped A4 ❌→✅, A5 🟡→✅, and C4
 🟡→✅ (the `web_search` collision bug, resolved as one tool with a
@@ -536,7 +535,8 @@ D29) flipped F2 🟡→✅: users/sessions in a relational store behind
 data migrated by `scripts/migrate_json_to_db.py`. Milestone 5 (auth
 scaffolding + admin monitoring, D30) flipped F4 🟡→✅: JWT
 issue/verify at login, admin/user roles, durable per-call usage logging
-with admin-only `/usage`/`/users` views.
+with admin-only `/usage`/`/users` views. Milestone 6 (memory
+injection, D31) flipped E3 🟡→✅.
 
 Nothing was scored 🔵 deliberately-deferred at the item level — every gap
 found is either a real fix-now bug (the `web_search` collision), a design

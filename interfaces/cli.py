@@ -171,8 +171,20 @@ class Session:
             engine.workspace.set_workspace_root(None)
 
     def _new_conversation(self) -> Conversation:
+        # Memory injection (D31): what earlier sessions remembered arrives
+        # in the system prompt at session start, capped so it can't blow
+        # the context budget -- instead of relying on the model choosing
+        # to call the memory tool before it acts.
+        system_prompt = self.config.system_prompt
+        overview = context_engine.memory_tool.memory_overview(self.config.memory_dir)
+        if overview:
+            system_prompt += (
+                "\n\n## Your memory (notes from earlier sessions)\n"
+                f"{overview}\n"
+                "(Read more or update it with the memory tool.)"
+            )
         return Conversation(
-            self.config.system_prompt,
+            system_prompt,
             max_context_tokens=effective_context_budget(
                 self.config.model, self.config.max_context_tokens
             ),

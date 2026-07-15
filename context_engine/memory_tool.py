@@ -133,6 +133,45 @@ def _rename(old_path: str, new_path: str) -> str:
     return f"Renamed '{old_path}' -> '{new_path}'"
 
 
+def memory_overview(root: str | None = None, max_chars: int = 2_000) -> str:
+    """A capped digest of the memory directory for system-prompt injection
+    at session start (D31): the top-level listing plus the head of each
+    top-level text file, cut off at `max_chars` with a pointer to the
+    memory tool for the rest. Returns "" when there's nothing remembered,
+    so an empty memory adds zero prompt overhead.
+
+    This closes the gap between "the system prompt *tells* the model to
+    check memory" and "memory is actually in front of it": prior sessions'
+    notes now arrive without depending on the model deciding to call the
+    tool first."""
+    base = root if root is not None else _ROOT.get()
+    if not os.path.isdir(base):
+        return ""
+    parts: list[str] = []
+    try:
+        entries = sorted(os.listdir(base))
+    except OSError:
+        return ""
+    for name in entries:
+        full = os.path.join(base, name)
+        if os.path.isdir(full):
+            parts.append(f"[directory] {name}/ (use the memory tool to view)")
+            continue
+        try:
+            with open(full, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+        except (OSError, UnicodeDecodeError):
+            continue
+        if content:
+            parts.append(f"--- {name} ---\n{content}")
+    if not parts:
+        return ""
+    text = "\n\n".join(parts)
+    if len(text) > max_chars:
+        text = text[:max_chars] + "\n... [truncated -- use the memory tool's view command for the rest]"
+    return text
+
+
 _COMMANDS = {
     "view": lambda a: _view(a.get("path", "."), a.get("view_range")),
     "create": lambda a: _create(a["path"], a.get("file_text", "")),

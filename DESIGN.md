@@ -739,6 +739,25 @@ storage APIs (a Python caller with the engine can query anything;
 process-level trust is unchanged from D22). The boundary becomes real in
 the server phase, which is exactly what this shape was built for.
 
+### D31 — Long-term memory is injected at session start, not just advertised
+**Decision:** `context_engine/memory_tool.py`'s `memory_overview(root,
+max_chars=2000)` builds a capped digest of the user's memory directory —
+each top-level file's contents, subdirectories listed by name only — and
+`Session._new_conversation` appends it to the system prompt under
+"## Your memory (notes from earlier sessions)" whenever it's non-empty.
+Empty memory adds zero prompt overhead.
+**Why:** the audit (E3) found the system prompt *instructed* the model to
+check memory, but nothing guaranteed prior notes were ever seen — it
+depended entirely on the model choosing to call the tool first. Injection
+closes that: what earlier sessions recorded is simply in front of the
+model from turn one, and the tool remains the way to read more (the
+digest truncates with an explicit pointer) or write updates.
+**Trade-off:** the digest spends prompt tokens on every session even when
+the memory is irrelevant to the task, and a loaded (`/load`) session keeps
+whatever prompt it was saved with rather than re-injecting current memory.
+Both accepted: the cap bounds the cost, and re-injecting into a restored
+conversation would rewrite history the summary/compaction may reference.
+
 ---
 
 ## Known limitations & future work

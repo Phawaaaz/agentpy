@@ -99,7 +99,10 @@ Two independent pieces (see DESIGN.md D16 for why they're separate):
   `.harness/memory/activity.md` up to date with the current task, files
   touched, and tool usage counts. Check it anytime with `/memory`.
 
-Both write into `HARNESS_MEMORY_DIR` (default `.harness/memory`).
+Both write into `HARNESS_MEMORY_DIR` (default `.harness/memory`). At the
+start of every new session, a capped digest of your memory directory is
+injected into the system prompt automatically (DESIGN.md D31) — the agent
+sees prior notes without having to think to look for them.
 
 ## Skills
 
