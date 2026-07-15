@@ -674,6 +674,40 @@ way an assignment to `_ROOT` used to show. Mitigated by keeping the same
 `set_*` entry points and documenting the pattern here and in each module's
 docstring.
 
+### D29 — Users and sessions move to a relational store behind one URL
+**Decision:** a new `storage/` package (SQLAlchemy) owns user accounts and
+session persistence: `users` (with integer `user_id` primary keys and a
+two-tier `admin`/`user` role — the first account ever created bootstraps
+as admin), `sessions` keyed by `(session_id, user_id)`, and a `usage_log`
+table (schema now, writer lands with admin monitoring in the next
+milestone). One connection string, `HARNESS_DB_URL`, picks the backend —
+default `sqlite:///.harness/harness.db` (zero ops), any
+`postgresql+psycopg://...` URL for Postgres with no code change.
+`DbUserStore`/`DbSessionStore` keep the old stores' public interfaces
+(`exists/register/verify/list_usernames`, `save/load/list_ids`) plus what
+JSON couldn't do: `delete()` (wired to a new `/delete <id>` command),
+real cross-user isolation at the query level (a store is *bound* to a
+user_id at construction — no query can reach another user's rows), and
+concurrent-write safety.
+**What was replaced vs. kept:** `context_engine/session_store.py` is
+deleted (replaced outright, per the plan decision — no caller depended on
+its module path but the CLI). `auth/users.py` keeps the PBKDF2
+`hash_password`/`verify_password` (the DB store uses them unchanged, so
+migrated hashes still verify) and keeps the JSON `UserStore` class marked
+LEGACY, as the read-side of `scripts/migrate_json_to_db.py` — the
+idempotent one-time migration that copies `.harness/users.json` accounts
+(hashes verbatim) and `.harness/sessions/<user>/*.json` snapshots into the
+database.
+**Why one snapshot blob per session instead of per-message rows:** resume
+always loads the whole history anyway; the blob is byte-identical to what
+the file store wrote, which makes migration an exact copy; and exploding
+to rows is a later, additive change if per-message queries ever matter.
+**Trade-off:** SQLAlchemy is the project's first ORM dependency (a
+recorded deviation from the stdlib-only bias of D3/D22 — accepted because
+hand-writing two dialects of SQL for a schema this small is worse), and
+SQLite remains single-writer; the Postgres URL swap is the documented
+answer once a concurrent server process exists.
+
 ---
 
 ## Known limitations & future work
@@ -682,10 +716,11 @@ docstring.
   heuristic (`estimate_tokens`) is approximate; the actual per-turn usage from
   the API is exact and used for cost. Good enough to decide *when* to compact.
 - **Prices drift:** `PRICING` in `observability/usage.py` is manually maintained.
-- **Per-user, but still single-writer, JSON persistence:** D22 namespaces
-  sessions/memory/logs/offload by username so different users don't collide,
-  but each user's own store is still the JSON-file `SessionStore` from D12 --
-  no concurrent-write protection *within* one account.
+- ~~**Per-user, but still single-writer, JSON persistence**~~ — fixed by
+  D29: users and sessions live in the relational store (SQLite locally,
+  Postgres by URL swap), with per-user isolation enforced at the query
+  level and real concurrent-write safety. Memory, logs, offload, and
+  workspaces intentionally remain files on disk.
 - **Auth is real hashing, not a security boundary:** see D22's trade-off --
   no encryption at rest, no session tokens/expiry, no password reset, and
   filesystem access to `.harness/users.json` or the running process reads

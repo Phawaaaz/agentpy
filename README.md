@@ -188,6 +188,7 @@ Inside the CLI, lines starting with `/` are commands (everything else is a task)
 | `/new` | Start a fresh conversation |
 | `/save [id]` | Save the current session |
 | `/load <id>` | Resume a saved session |
+| `/delete <id>` | Delete a saved session |
 | `/sessions` | List saved sessions |
 | `/cost` | Show token usage + estimated cost |
 | `/memory` | Show what the harness has been working on |
@@ -198,8 +199,12 @@ Inside the CLI, lines starting with `/` are commands (everything else is a task)
 | `/roles` | List configured sub-agent roles (`delegate` target) |
 | `/help` | List commands |
 
-Sessions auto-save after each turn to `.harness/sessions/`; events are traced to
-`.harness/logs/`. Long conversations are automatically compacted (older messages
+Sessions auto-save after each turn to the relational store (`HARNESS_DB_URL`,
+default a SQLite file at `.harness/harness.db`; point it at Postgres for a
+multi-user server — no code change). Events are traced to `.harness/logs/`.
+Upgrading from an older checkout with JSON-file sessions/accounts? Run
+`python scripts/migrate_json_to_db.py` once — passwords and history carry
+over exactly. Long conversations are automatically compacted (older messages
 summarized) so they don't overflow the model's context window.
 
 ## Workspace confinement (opt-in)
@@ -242,6 +247,7 @@ python tests/model_info_test.py     # per-model window/output limits, factory wi
 python tests/config_yaml_test.py    # .harness.yaml config + pipeline auto-push/PR
 python tests/workspace_test.py      # opt-in workspace confinement (D27)
 python tests/concurrency_test.py    # two sessions, zero state leakage (D28)
+python tests/storage_test.py        # DB users/sessions, isolation, JSON->DB migration (D29)
 ```
 
-All eighteen run against fakes — no key, no network — and should print `... PASSED`.
+All nineteen run against fakes — no key, no network — and should print `... PASSED`.

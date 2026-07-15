@@ -1,8 +1,14 @@
-"""User accounts stored in a JSON file, same external-config shape as
-.harness/mcp.json / roles.json / skills.json (D14/D17/D18).
+"""Password hashing, plus the legacy JSON-file account store.
 
 Passwords are never stored in plaintext: PBKDF2-HMAC-SHA256 with a random
 per-user salt, stdlib only (`hashlib` + `secrets`), no extra dependency.
+`hash_password`/`verify_password` are the live hashing implementation --
+storage/user_store.py's database-backed accounts use them (D29).
+
+`UserStore` (the JSON file at .harness/users.json) is LEGACY as of D29: the
+CLI now authenticates against storage/user_store.py's DbUserStore. The class
+stays only as the read-side of scripts/migrate_json_to_db.py and for any
+older checkout's data; new code should not write accounts through it.
 """
 
 import hashlib

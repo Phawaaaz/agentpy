@@ -336,10 +336,14 @@ access.** 🟡 **Partial.** True for session/memory/logs/offload storage
 (`Config.for_user`, path-validated). **Not true for the tool registry or the
 module-global state** — see F3.
 
-**F2. Session lifecycle: create/list/resume/delete.** 🟡 **Partial.**
-Create ✅ (`/new`), list ✅ (`/sessions`), resume ✅ (`/load`). **Delete: ❌
-missing** — `SessionStore` has no `delete`/`remove` method and there is no
-`/delete` command; old sessions accumulate forever with no cleanup path.
+**F2. Session lifecycle: create/list/resume/delete.** ✅ **Implemented**
+(Milestone 4, D29). Create (`/new`), list (`/sessions`), resume (`/load`),
+and now delete (`/delete <id>`, backed by `DbSessionStore.delete` — refuses
+to delete the active session). Sessions live in the relational store
+(`HARNESS_DB_URL`: SQLite default, Postgres by URL swap), keyed by
+`(session_id, user_id)` with a one-time idempotent migration
+(`scripts/migrate_json_to_db.py`) from the old JSON files. Verified by
+`tests/storage_test.py` and a live CLI save/list/load/delete run.
 
 **F3. Concurrency: two sessions don't corrupt each other's state.**
 ✅ **Implemented** (Milestone 3, D28). The module-level globals the audit
@@ -507,11 +511,11 @@ initial audit.
 | C. Tools/Execution/MCP (6) | **5** | 1 | 0 | 0 |
 | D. Filesystem & Workspace (3) | **2** | 1 | 0 | 0 |
 | E. Memory (3) | 2 | 1 | 0 | 0 |
-| F. Sessions/Multi-user/Auth (4) | **1** | 3 | 0 | 0 |
+| F. Sessions/Multi-user/Auth (4) | **2** | 2 | 0 | 0 |
 | G. Sandbox (1) | 0 | 0 | 1 | 0 |
 | H. Long-Horizon (5) | 3 | 1 | 1 | 0 |
 | I. Observability/Config (3) | 1 | 2 | 0 | 0 |
-| **Total (35 items)** | **20** | **12** | **3** | **0** |
+| **Total (35 items)** | **21** | **11** | **3** | **0** |
 
 Milestone 1 (model layer hardening) flipped A4 ❌→✅, A5 🟡→✅, and C4
 🟡→✅ (the `web_search` collision bug, resolved as one tool with a
@@ -519,7 +523,10 @@ key-gated Tavily/DuckDuckGo backend split — D25/D26). Milestone 2
 (workspace isolation, D27) flipped D1 ❌→✅ and D2 ❌→✅ (opt-in
 confinement per the owner's rollout decision; default off for the local
 CLI). Milestone 3 (global-state removal, D28) flipped F3 ❌→✅ via
-ContextVars and removed H4's shared-plan caveat.
+ContextVars and removed H4's shared-plan caveat. Milestone 4 (storage,
+D29) flipped F2 🟡→✅: users/sessions in a relational store behind
+`HARNESS_DB_URL` (SQLite default, Postgres-ready), `/delete` added, JSON
+data migrated by `scripts/migrate_json_to_db.py`.
 
 Nothing was scored 🔵 deliberately-deferred at the item level — every gap
 found is either a real fix-now bug (the `web_search` collision), a design

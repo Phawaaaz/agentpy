@@ -11,11 +11,9 @@ import os
 from dataclasses import replace
 from datetime import datetime
 
-from auth.users import UserStore
 from config import Config
 from context_engine.compaction import Conversation, make_provider_summarizer
 from context_engine.memory_tracker import MemoryTracker
-from context_engine.session_store import SessionStore
 from engine.mcp_client import MCPManager, load_server_configs
 from engine.orchestrator import Orchestrator
 from engine.registry import Tool, registry
@@ -28,6 +26,9 @@ from pipeline.external_skills import load_external_skills
 from providers.base import ToolCall
 from providers.factory import OPENAI_COMPATIBLE, build_provider
 from providers.model_info import effective_context_budget
+from storage.db import make_engine
+from storage.session_store import DbSessionStore
+from storage.user_store import DbUserStore
 
 # Importing these modules registers their tools onto the shared registry.
 import context_engine.memory_tool  # noqa: F401
@@ -45,6 +46,7 @@ HELP = """commands:
   /new                 start a fresh conversation
   /save [id]           save the current session (default id = current)
   /load <id>           load a saved session
+  /delete <id>         delete a saved session
   /sessions            list saved sessions
   /cost                show token usage and estimated cost
   /memory              show what the harness has been working on
@@ -262,7 +264,7 @@ def _handle_skill_command(
     stage: str,
     args: list[str],
     session: Session,
-    store: SessionStore,
+    store: DbSessionStore,
     memory_tracker: MemoryTracker,
     skills: dict,
 ) -> None:
@@ -290,7 +292,7 @@ def _handle_skill_command(
 def _handle_command(
     text: str,
     session: Session,
-    store: SessionStore,
+    store: DbSessionStore,
     mcp_manager: MCPManager,
     memory_tracker: MemoryTracker,
     roles: dict,
@@ -321,6 +323,15 @@ def _handle_command(
             engine.builtin.planning.reset_plan()
             session.apply_workspace_root()
             print(f"loaded session: {args[0]}")
+        else:
+            print(f"no such session: {args[0]}")
+    elif cmd == "/delete":
+        if not args:
+            print("usage: /delete <id>")
+        elif args[0] == session.id:
+            print("that's the active session -- /new first, then /delete it")
+        elif store.delete(args[0]):
+            print(f"deleted session: {args[0]}")
         else:
             print(f"no such session: {args[0]}")
     elif cmd == "/sessions":
@@ -358,15 +369,14 @@ def _connect_configured_mcp_servers(mcp_manager: MCPManager, config: Config) -> 
             print(f"  mcp '{server.name}': failed to connect ({exc})")
 
 
-def _login(users_config_path: str, max_attempts: int = 3) -> str:
-    """Authenticate a user against `users_config_path`, registering a new
+def _login(store: DbUserStore, max_attempts: int = 3) -> str:
+    """Authenticate a user against the account store, registering a new
     account on first sight of a username. Returns the logged-in username.
 
     `HARNESS_USER`/`HARNESS_PASSWORD` skip the interactive prompt (for
     scripted/demo use, same "env var first" convention as the rest of
     Config.load()); with only `HARNESS_USER` set, the username is
     pre-filled but the password is still prompted for."""
-    store = UserStore(users_config_path)
     env_user = os.getenv("HARNESS_USER")
     env_password = os.getenv("HARNESS_PASSWORD")
     if env_user and env_password:
@@ -408,7 +418,10 @@ def _login(users_config_path: str, max_attempts: int = 3) -> str:
 
 def main() -> None:
     config = Config.load()
-    username = _login(config.users_config_path)
+    db_engine = make_engine(config.db_url)
+    user_store = DbUserStore(db_engine)
+    username = _login(user_store)
+    user_id = user_store.user_id(username)
     config = config.for_user(username)
     provider = build_provider(config)
     run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -447,7 +460,7 @@ def main() -> None:
     registry.register(build_search_tool(config.search_api_key))
 
     session = Session(config, provider, on_event, username=username)
-    store = SessionStore(config.sessions_dir)
+    store = DbSessionStore(db_engine, user_id)
     mcp_manager = MCPManager(registry)
 
     print("=" * 60)

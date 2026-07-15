@@ -11,11 +11,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import Config
 from context_engine.compaction import Conversation
-from context_engine.session_store import SessionStore
 from engine.orchestrator import Orchestrator
 from engine.registry import registry
 from observability.usage import UsageTracker, cost_for
 from providers.base import Provider, Response, Usage
+from storage.db import make_engine
+from storage.session_store import DbSessionStore
+from storage.user_store import DbUserStore
 
 import engine.builtin.filesystem  # noqa: F401
 
@@ -81,7 +83,9 @@ def test_context_compaction():
 
 def test_session_roundtrip():
     with tempfile.TemporaryDirectory() as d:
-        store = SessionStore(d)
+        engine = make_engine(f"sqlite:///{os.path.join(d, 'test.db')}")
+        user_id = DbUserStore(engine).register("tester", "pw")
+        store = DbSessionStore(engine, user_id)
         a = Conversation("SYS")
         a.add({"role": "user", "content": "remember this"})
         a.summary = "earlier stuff"
@@ -94,7 +98,7 @@ def test_session_roundtrip():
         assert b.system_prompt == "SYS"
         assert store.list_ids() == ["sess1"]
         assert store.load("missing", b) is False
-    print("  session round-trip OK")
+    print("  session round-trip (database-backed, D29) OK")
 
 
 def main():

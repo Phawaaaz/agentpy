@@ -16,6 +16,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import interfaces.cli as cli
 from auth.users import UserStore, hash_password, verify_password
 from config import Config
+from storage.db import make_engine
+from storage.user_store import DbUserStore
+
+
+def _db_store(tmp: str) -> DbUserStore:
+    return DbUserStore(make_engine(f"sqlite:///{os.path.join(tmp, 'test.db')}"))
 
 
 def test_hash_password_uses_a_random_salt_and_verifies():
@@ -128,12 +134,12 @@ def test_config_for_user_rejects_path_traversal_usernames():
 
 def test_login_env_var_shortcut_existing_user():
     with tempfile.TemporaryDirectory() as tmp:
-        path = os.path.join(tmp, "users.json")
-        UserStore(path).register("erin", "topsecret")
+        store = _db_store(tmp)
+        store.register("erin", "topsecret")
         os.environ["HARNESS_USER"] = "erin"
         os.environ["HARNESS_PASSWORD"] = "topsecret"
         try:
-            username = cli._login(path)
+            username = cli._login(store)
         finally:
             del os.environ["HARNESS_USER"]
             del os.environ["HARNESS_PASSWORD"]
@@ -143,28 +149,28 @@ def test_login_env_var_shortcut_existing_user():
 
 def test_login_env_var_shortcut_registers_new_user():
     with tempfile.TemporaryDirectory() as tmp:
-        path = os.path.join(tmp, "users.json")
+        store = _db_store(tmp)
         os.environ["HARNESS_USER"] = "frank"
         os.environ["HARNESS_PASSWORD"] = "brandnew"
         try:
-            username = cli._login(path)
+            username = cli._login(store)
         finally:
             del os.environ["HARNESS_USER"]
             del os.environ["HARNESS_PASSWORD"]
         assert username == "frank"
-        assert UserStore(path).verify("frank", "brandnew")
+        assert store.verify("frank", "brandnew")
         print("  HARNESS_USER/HARNESS_PASSWORD shortcut (new user) OK")
 
 
 def test_login_env_var_shortcut_wrong_password_exits():
     with tempfile.TemporaryDirectory() as tmp:
-        path = os.path.join(tmp, "users.json")
-        UserStore(path).register("grace", "realpassword")
+        store = _db_store(tmp)
+        store.register("grace", "realpassword")
         os.environ["HARNESS_USER"] = "grace"
         os.environ["HARNESS_PASSWORD"] = "wrongpassword"
         try:
             try:
-                cli._login(path)
+                cli._login(store)
                 raised = False
             except SystemExit:
                 raised = True
@@ -177,7 +183,7 @@ def test_login_env_var_shortcut_wrong_password_exits():
 
 def test_login_interactive_registers_and_signs_in():
     with tempfile.TemporaryDirectory() as tmp:
-        path = os.path.join(tmp, "users.json")
+        store = _db_store(tmp)
         inputs = iter(["heidi"])
         passwords = iter(["newpass123", "newpass123"])  # choose + confirm
 
@@ -185,20 +191,20 @@ def test_login_interactive_registers_and_signs_in():
         builtins.input = lambda *_a, **_k: next(inputs)
         cli.getpass.getpass = lambda *_a, **_k: next(passwords)
         try:
-            username = cli._login(path)
+            username = cli._login(store)
         finally:
             builtins.input = original_input
             cli.getpass.getpass = original_getpass
 
         assert username == "heidi"
-        assert UserStore(path).verify("heidi", "newpass123")
+        assert store.verify("heidi", "newpass123")
         print("  interactive login registers + signs in a new user OK")
 
 
 def test_login_interactive_existing_user_wrong_then_right_password():
     with tempfile.TemporaryDirectory() as tmp:
-        path = os.path.join(tmp, "users.json")
-        UserStore(path).register("ivan", "rightpass")
+        store = _db_store(tmp)
+        store.register("ivan", "rightpass")
         inputs = iter(["ivan", "ivan"])  # re-prompted for username after a wrong password
         passwords = iter(["wrongpass", "rightpass"])
 
@@ -206,7 +212,7 @@ def test_login_interactive_existing_user_wrong_then_right_password():
         builtins.input = lambda *_a, **_k: next(inputs)
         cli.getpass.getpass = lambda *_a, **_k: next(passwords)
         try:
-            username = cli._login(path)
+            username = cli._login(store)
         finally:
             builtins.input = original_input
             cli.getpass.getpass = original_getpass

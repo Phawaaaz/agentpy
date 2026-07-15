@@ -108,7 +108,11 @@ class Config:
     skills_config_path: str = ".harness/skills.json"
     # Where oversized tool output gets written instead of silently truncated.
     offload_dir: str = ".harness/offload"
-    # Where user accounts (username + salted/hashed password) are stored.
+    # Relational store for users, sessions, and usage accounting (D29).
+    # SQLite file by default; any SQLAlchemy URL works (e.g.
+    # postgresql+psycopg://... for Postgres) with no code change.
+    db_url: str = "sqlite:///.harness/harness.db"
+    # Legacy JSON account file -- read only by scripts/migrate_json_to_db.py.
     users_config_path: str = ".harness/users.json"
     # Tavily API key for the web_search tool; unset = DuckDuckGo fallback (D25).
     search_api_key: str | None = None
@@ -190,6 +194,7 @@ class Config:
             roles_config_path=get_val("HARNESS_ROLES_CONFIG", "roles_config_path", cls.roles_config_path),
             skills_config_path=get_val("HARNESS_SKILLS_CONFIG", "skills_config_path", cls.skills_config_path),
             offload_dir=get_val("HARNESS_OFFLOAD_DIR", "offload_dir", cls.offload_dir),
+            db_url=get_val("HARNESS_DB_URL", "db_url", cls.db_url),
             users_config_path=get_val("HARNESS_USERS_FILE", "users_config_path", cls.users_config_path),
             search_api_key=get_val("HARNESS_SEARCH_API_KEY", "search_api_key", cls.search_api_key) or None,
             confine_workspace=get_val("HARNESS_CONFINE_WORKSPACE", "confine_workspace", cls.confine_workspace, to_bool),
