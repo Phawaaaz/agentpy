@@ -19,12 +19,16 @@ Run:  uvicorn interfaces.server:app   (after `pip install -r requirements-server
 or:   python -m interfaces.server
 """
 
+import asyncio
 import contextvars
+import json
+import threading
 from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
@@ -132,16 +136,16 @@ def create_app(config: Config | None = None) -> FastAPI:
     def _user_config(username: str) -> Config:
         return state.config.for_user(username)
 
-    def _run_turn(username: str, user_id: int, session_id: str, message: str) -> MessageResponse:
+    def _turn(username, user_id, session_id, message, on_event=None):
         """Run one agent turn for a specific user+session in an ISOLATED
         execution context (D28): the memory/offload/workspace roots are set
         as ContextVars inside a copied context, so concurrent requests for
-        different users never see each other's state."""
+        different users never see each other's state. `on_event`, if given,
+        receives the orchestrator's live events (used for SSE streaming)."""
         user_config = _user_config(username)
         store = DbSessionStore(state.engine, user_id)
 
-        def turn() -> MessageResponse:
-            # Per-request isolation roots (copied context -> no leakage).
+        def turn():
             context_engine.memory_tool.set_memory_root(user_config.memory_dir)
             engine.builtin.offload.set_offload_root(user_config.offload_dir)
             if user_config.confine_workspace:
@@ -171,14 +175,19 @@ def create_app(config: Config | None = None) -> FastAPI:
                 # is denied (fail safe) -- human-in-the-loop approval over
                 # HTTP is a later milestone. Run the server in allowlist/auto.
                 approver=lambda call, tool: False,
+                on_event=on_event or (lambda *a: None),
                 conversation=conversation,
                 usage_tracker=usage,
             )
             answer = agent.run(message)
             store.save(session_id, conversation)
-            return MessageResponse(session_id=session_id, answer=answer, usage=usage.summary())
+            return answer, usage.summary()
 
         return contextvars.copy_context().run(turn)
+
+    def _run_turn(username, user_id, session_id, message) -> MessageResponse:
+        answer, usage = _turn(username, user_id, session_id, message)
+        return MessageResponse(session_id=session_id, answer=answer, usage=usage)
 
     # --- auth -------------------------------------------------------------
 
@@ -248,6 +257,47 @@ def create_app(config: Config | None = None) -> FastAPI:
         username = _username_for(identity.user_id)
         return _run_turn(username, identity.user_id, session_id, body.message)
 
+    @app.post("/sessions/{session_id}/messages/stream")
+    async def post_message_stream(session_id: str, body: MessageRequest, identity: IdentityDep):
+        """Same turn, streamed as Server-Sent Events: the client sees
+        `thinking`, `tool_call`, `tool_result`, `usage`, and a final `answer`
+        event as they happen, instead of waiting for one blob. The
+        synchronous Orchestrator runs in a worker thread; its on_event
+        callback bridges events to this request's asyncio loop via a queue."""
+        store = DbSessionStore(state.engine, identity.user_id)
+        if session_id not in store.list_ids():
+            raise HTTPException(status_code=404, detail="no such session")
+        username = _username_for(identity.user_id)
+
+        loop = asyncio.get_running_loop()
+        q: asyncio.Queue = asyncio.Queue()
+        DONE = object()
+
+        def on_event(kind, *details):
+            loop.call_soon_threadsafe(q.put_nowait, (kind, details))
+
+        def work():
+            try:
+                answer, usage = _turn(username, identity.user_id, session_id, body.message, on_event=on_event)
+                loop.call_soon_threadsafe(q.put_nowait, ("answer", (answer, usage)))
+            except Exception as exc:  # surfaced to the client as an error event
+                loop.call_soon_threadsafe(q.put_nowait, ("error", (str(exc),)))
+            finally:
+                loop.call_soon_threadsafe(q.put_nowait, DONE)
+
+        threading.Thread(target=work, daemon=True).start()
+
+        async def sse():
+            while True:
+                item = await q.get()
+                if item is DONE:
+                    yield "event: done\ndata: {}\n\n"
+                    return
+                kind, details = item
+                yield f"event: {kind}\ndata: {json.dumps(_event_payload(kind, details))}\n\n"
+
+        return StreamingResponse(sse(), media_type="text/event-stream")
+
     # --- admin ------------------------------------------------------------
 
     @app.get("/admin/usage")
@@ -269,6 +319,40 @@ def create_app(config: Config | None = None) -> FastAPI:
         return {"status": "ok", "model": state.config.model}
 
     return app
+
+
+_SSE_RESULT_CAP = 2_000  # don't flood the stream with a huge tool result
+
+
+def _event_payload(kind: str, details: tuple) -> dict:
+    """Map an orchestrator on_event (kind, *details) to a JSON SSE payload.
+    Mirrors interfaces/cli.py's event handling, trimmed for the wire."""
+    if kind == "thinking":
+        return {"text": details[0]}
+    if kind == "tool_call":
+        return {"name": details[0], "arguments": details[1]}
+    if kind == "tool_result":
+        result = details[1]
+        if len(result) > _SSE_RESULT_CAP:
+            result = result[:_SSE_RESULT_CAP] + " …[truncated]"
+        payload = {"name": details[0], "result": result}
+        if len(details) > 2:
+            payload["duration_ms"] = details[2]
+        return payload
+    if kind == "denied":
+        return {"tool": details[0]}
+    if kind == "compacted":
+        return {"tokens": details[0]}
+    if kind == "usage":
+        payload = {"prompt_tokens": details[0], "completion_tokens": details[1]}
+        if len(details) > 2:
+            payload["duration_ms"] = details[2]
+        return payload
+    if kind == "answer":
+        return {"answer": details[0], "usage": details[1]}
+    if kind == "error":
+        return {"error": details[0]}
+    return {"details": list(details)}
 
 
 def _safe(session_id: str) -> str:

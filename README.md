@@ -263,14 +263,19 @@ uvicorn interfaces.server:app --host 0.0.0.0 --port 8000   # or: python main_ser
 
 Endpoints: `POST /auth/register`, `POST /auth/login` (→ JWT), `GET /auth/me`;
 `GET/POST /sessions`, `DELETE /sessions/{id}`, `POST /sessions/{id}/messages`
-(runs one agent turn); admin-only `GET /admin/usage[/{username}]`; `GET /health`.
+(runs one agent turn), `POST /sessions/{id}/messages/stream` (the same turn
+as **Server-Sent Events** — `thinking`/`tool_call`/`tool_result`/`answer`
+events arrive live so a UI isn't blocked); admin-only
+`GET /admin/usage[/{username}]`; `GET /health`.
 
 Notes:
 - The first registered account becomes **admin**. Auth is now enforced
   per-request (unlike the CLI's login scaffolding).
 - An HTTP turn has no human attached, so an `ask` permission decision is
-  **denied** (fail-safe) -- run the server in `allowlist` mode. Streaming
-  responses and human-in-the-loop approval over HTTP are the next milestones.
+  **denied** (fail-safe) -- run the server in `allowlist` mode.
+  Human-in-the-loop approval over HTTP is the next milestone. (Streaming is
+  event-level — tool calls and the final answer stream live; token-by-token
+  model output would need provider-level streaming, a later addition.)
 - Each request runs in an isolated execution context (D28): memory/offload/
   workspace roots are per-user, so concurrent requests never cross.
 

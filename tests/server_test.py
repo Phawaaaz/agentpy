@@ -27,12 +27,31 @@ def _run():
     from config import Config
     from providers.base import Provider, Response
 
+    from providers.base import ToolCall
+
     class FakeProvider(Provider):
         def complete(self, messages, tools):
             # Echo the last user message so the test can assert the turn ran.
             last = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
             text = f"handled: {last}"
             return Response(text=text, tool_calls=[], assistant_message={"role": "assistant", "content": text})
+
+    class ToolThenFinalProvider(Provider):
+        """First turn: call list_dir; second turn: final answer. Lets the
+        streaming test observe tool_call + tool_result + answer events."""
+        def __init__(self):
+            self._n = 0
+
+        def complete(self, messages, tools):
+            self._n += 1
+            if self._n == 1:
+                return Response(
+                    text=None,
+                    tool_calls=[ToolCall(id="c1", name="list_dir", arguments={"path": "."})],
+                    assistant_message={"role": "assistant", "content": "", "tool_calls": [
+                        {"id": "c1", "type": "function", "function": {"name": "list_dir", "arguments": "{}"}}]},
+                )
+            return Response(text="all done", tool_calls=[], assistant_message={"role": "assistant", "content": "all done"})
 
     tmp = tempfile.mkdtemp()
     cfg = Config(
@@ -99,6 +118,25 @@ def _run():
     assert client.get("/admin/usage", headers=a_auth).status_code == 200
     assert client.get("/admin/usage", headers=b_auth).status_code == 403
     print("  admin usage endpoint gated to admins OK")
+
+    # STREAMING (SSE): a turn that makes a tool call streams tool_call +
+    # tool_result + answer + done events, isolated to alice.
+    server.build_provider = lambda config: ToolThenFinalProvider()
+    sid2 = client.post("/sessions", headers=a_auth).json()["session_id"]
+    with client.stream("POST", f"/sessions/{sid2}/messages/stream",
+                       headers=a_auth, json={"message": "list things"}) as resp:
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/event-stream")
+        body = "".join(resp.iter_text())
+    events = [ln[len("event: "):] for ln in body.splitlines() if ln.startswith("event: ")]
+    assert "tool_call" in events, events
+    assert "tool_result" in events, events
+    assert "answer" in events and events[-1] == "done", events
+    assert "all done" in body  # the final answer text made it into the stream
+    # streaming endpoint is auth-enforced + isolated too
+    assert client.post(f"/sessions/{sid2}/messages/stream", headers=b_auth,
+                       json={"message": "x"}).status_code == 404
+    print("  SSE streaming: tool_call/tool_result/answer/done events, auth-enforced OK")
 
 
 def test_server():
