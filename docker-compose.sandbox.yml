@@ -1,0 +1,40 @@
+# Sandbox override (Option B: isolated Docker-in-Docker sidecar).
+#
+# Layer this on top of the base stack to enable HARNESS_SANDBOX=docker without
+# exposing the HOST daemon to the API container:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.sandbox.yml up --build
+#
+# Sandbox containers run inside the `dind` daemon, NOT on the host, so an agent
+# command that escapes its container still can't reach the host. This is the
+# recommended shape for untrusted / multi-tenant use. For a trusted single box
+# you can instead mount /var/run/docker.sock into `api` (Option A -- simpler,
+# but grants host-root; see DEPLOY.md).
+services:
+  dind:
+    image: docker:27-dind
+    privileged: true                 # required for a nested Docker daemon
+    environment:
+      DOCKER_TLS_CERTDIR: ""         # plain TCP on the internal network only
+    command: ["--host=tcp://0.0.0.0:2375"]
+    volumes:
+      # Share the workspace volume so the sandbox can mount per-session dirs
+      # at the SAME path the API sees them (the bind mount uses the daemon's
+      # filesystem, which is dind's here).
+      - harness_ws:/app/workspaces
+    healthcheck:
+      test: ["CMD", "docker", "info"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    environment:
+      # Point the API's docker CLI at the dind daemon, and turn the sandbox on.
+      DOCKER_HOST: tcp://dind:2375
+      HARNESS_SANDBOX: "docker"
+      HARNESS_SANDBOX_IMAGE: "python:3.11-slim"
+      HARNESS_WORKSPACE_DIR: /app/workspaces
+    depends_on:
+      dind:
+        condition: service_healthy

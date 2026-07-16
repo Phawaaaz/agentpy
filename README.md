@@ -285,8 +285,17 @@ docker compose up --build
 
 The compose file points `HARNESS_DB_URL` at Postgres and sets safe server
 defaults (`HARNESS_CONFINE_WORKSPACE=true`, `allowlist`). The container-based
-command sandbox (`HARNESS_SANDBOX=docker`) needs a Docker socket/DinD and is
-left off in the default compose.
+command sandbox (`HARNESS_SANDBOX=docker`) needs an external Docker daemon;
+enable it with the isolated dind-sidecar override:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.sandbox.yml up --build
+```
+
+See **[DEPLOY.md](DEPLOY.md)** for the full deployment guide — the three ways
+to give the sandbox a Docker daemon (host socket vs. dind sidecar vs.
+running on a Docker host), getting Docker on a fresh box, and a production
+checklist.
 
 ## Permission modes (set `HARNESS_PERMISSION_MODE` in `.env`)
 
