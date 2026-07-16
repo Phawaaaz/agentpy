@@ -1,12 +1,17 @@
-"""Web search tool via the Tavily API (https://tavily.com -- built for LLM
-agent tool-calling, free tier available). Uses only the standard library
-(urllib), same as fetch_url -- no new dependency.
+"""The single `web_search` tool, with two backends behind one name (D25):
 
-Unlike the other engine/builtin/ tools, this one does NOT self-register on
-import: it needs an API key, so interfaces/cli.py only registers it when
-HARNESS_SEARCH_API_KEY is configured (same opt-in shape as
-multiagent/coordinator.py's build_delegate_tool -- no key means no tool,
-not a tool that always errors). See DESIGN.md D24.
+- Tavily (https://tavily.com -- built for LLM tool-calling, free tier
+  available) when an API key is configured -- the reliable path.
+- DuckDuckGo lite-HTML scraping (engine/builtin/web.py's
+  `duckduckgo_search`) when no key is set -- so search still works with
+  zero configuration, just less reliably.
+
+Uses only the standard library (urllib), same as fetch_url -- no new
+dependency. Unlike most engine/builtin/ tools this one does NOT
+self-register on import: the key is a per-config value, so
+interfaces/cli.py and interfaces/pipeline_cli.py call
+`registry.register(build_search_tool(config.search_api_key))` -- always,
+key or not, since the fallback means the tool works either way.
 """
 
 import json
@@ -14,6 +19,7 @@ import urllib.request
 
 from ..registry import Tool
 from .offload import maybe_offload
+from .web import duckduckgo_search
 
 _MAX_OUTPUT = 20_000
 _ENDPOINT = "https://api.tavily.com/search"
@@ -32,23 +38,34 @@ def _format_results(payload: dict) -> str:
     return f"Answer: {answer}\n\n{text}" if answer else text
 
 
-def build_search_tool(api_key: str, timeout: int = 20) -> Tool:
-    """Build the web_search Tool bound to `api_key`. A closure (not a module-
-    level function) because the key is a per-config value, not a global."""
+def _tavily_search(api_key: str, query: str, max_results: int, timeout: int) -> str:
+    body = json.dumps(
+        {"api_key": api_key, "query": query, "max_results": max_results}
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        _ENDPOINT, data=body, headers={"Content-Type": "application/json"}, method="POST"
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        return f"Error searching for {query!r}: {exc}"
+    return _format_results(payload)
+
+
+def build_search_tool(api_key: str | None = None, timeout: int = 20) -> Tool:
+    """Build the web_search Tool. With `api_key`, searches via Tavily; without
+    one, falls back to DuckDuckGo scraping. A closure (not a module-level
+    function) because the key is a per-config value, not a global."""
 
     def web_search(query: str, max_results: int = 5) -> str:
-        body = json.dumps(
-            {"api_key": api_key, "query": query, "max_results": max(1, min(max_results, 10))}
-        ).encode("utf-8")
-        request = urllib.request.Request(
-            _ENDPOINT, data=body, headers={"Content-Type": "application/json"}, method="POST"
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-        except Exception as exc:
-            return f"Error searching for {query!r}: {exc}"
-        text = _format_results(payload)
+        if not query.strip():
+            return "Error: query must not be empty"
+        clamped = max(1, min(max_results, 10))
+        if api_key:
+            text = _tavily_search(api_key, query, clamped, timeout)
+        else:
+            text = duckduckgo_search(query, clamped, timeout)
         return maybe_offload(text, _MAX_OUTPUT, "web_search") or "(no results)"
 
     return Tool(

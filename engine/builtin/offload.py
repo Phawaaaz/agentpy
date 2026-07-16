@@ -7,19 +7,20 @@ model can `read_file` further into it) rather than lost.
 
 import hashlib
 import os
+from contextvars import ContextVar
 
-_ROOT = ".harness/offload"
+_ROOT: ContextVar[str] = ContextVar("offload_root", default=".harness/offload")
 _PREVIEW_CHARS = 4_000
 
 
 def set_offload_root(path: str) -> None:
     """Point offloaded files at a different directory (default:
-    .harness/offload). Same pattern as tools/memory.py's set_memory_root --
-    called once at startup by the interface, not injected through tool
-    handler signatures (which would break the plain (**kwargs) -> str
-    handler contract every other tool follows)."""
-    global _ROOT
-    _ROOT = path
+    .harness/offload). Called at startup by the interface, not injected
+    through tool handler signatures (which would break the plain
+    (**kwargs) -> str handler contract every other tool follows). A
+    ContextVar, not a global (D28): each session's execution context sees
+    its own root, so concurrent sessions can't cross-write."""
+    _ROOT.set(path)
 
 
 def maybe_offload(text: str, max_inline: int, label: str) -> str:
@@ -31,9 +32,10 @@ def maybe_offload(text: str, max_inline: int, label: str) -> str:
     if len(text) <= max_inline:
         return text
 
-    os.makedirs(_ROOT, exist_ok=True)
+    root = _ROOT.get()
+    os.makedirs(root, exist_ok=True)
     digest = hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()[:16]
-    path = os.path.join(_ROOT, f"{label}-{digest}.txt")
+    path = os.path.join(root, f"{label}-{digest}.txt")
     if not os.path.exists(path):
         with open(path, "w", encoding="utf-8") as f:
             f.write(text)

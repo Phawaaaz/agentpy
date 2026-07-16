@@ -19,6 +19,7 @@ import engine.builtin.git_tool  # noqa: F401
 import engine.builtin.github_tool  # noqa: F401
 import engine.builtin.offload
 import engine.builtin.planning  # noqa: F401
+import engine.builtin.search_files  # noqa: F401
 import engine.builtin.shell  # noqa: F401
 import engine.builtin.web  # noqa: F401
 from engine.builtin.search import build_search_tool
@@ -57,6 +58,19 @@ def main() -> None:
     task = " ".join(sys.argv[1:])
 
     config = Config.load()
+    # The autonomous pipeline isolates via git worktrees (it chdir's into a
+    # per-slice worktree), not the per-session workspace/container model the
+    # sandbox is built around. Rather than silently run commands on the host
+    # when the user set HARNESS_SANDBOX=docker (making them believe otherwise
+    # on the *unattended* path), fail loud -- fixed the silent-ignore bug the
+    # verification review found.
+    if config.sandbox == "docker":
+        raise SystemExit(
+            "HARNESS_SANDBOX=docker is not supported by the autonomous pipeline "
+            "(it isolates via git worktrees, not per-session containers). Unset "
+            "HARNESS_SANDBOX for `python pipeline.py`, or use the interactive CLI "
+            "(main.py) for sandboxed command execution."
+        )
     if config.permission_mode == "ask":
         print(
             "warning: HARNESS_PERMISSION_MODE is 'ask', but no human is present to answer "
@@ -65,12 +79,20 @@ def main() -> None:
             "for the pipeline to make real progress.\n"
         )
     engine.builtin.offload.set_offload_root(config.offload_dir)
-    if config.search_api_key:
-        registry.register(build_search_tool(config.search_api_key))
+    # One web_search tool, two backends: Tavily with a key, DuckDuckGo
+    # fallback without (D25).
+    registry.register(build_search_tool(config.search_api_key))
     provider = build_provider(config)
     runner = PipelineRunner(provider, registry, config, PipelineConfig.load(), on_event=_on_event)
 
-    result = runner.run(task)
+    try:
+        result = runner.run(task)
+    except Exception as exc:
+        # A provider failure that survives retries/fallback (D26), or a git
+        # failure, shouldn't end as a raw traceback: report and exit
+        # non-zero so scripts can react (I3 -- graceful loop-level errors).
+        print(f"\npipeline failed: {exc}")
+        sys.exit(1)
     print("\n" + "=" * 60)
     print(f"status:      {result.status}")
     print(f"stage:       {result.stage}")

@@ -13,33 +13,39 @@ path-traversal protection a text-editor tool needs for untrusted model input.
 """
 
 import os
+from contextvars import ContextVar
 
 from engine.builtin.offload import maybe_offload
 from engine.registry import Tool, registry
+from engine.workspace import confine
 
 _MAX_OUTPUT = 20_000
-_ROOT = ".harness/memory"
+_ROOT: ContextVar[str] = ContextVar("memory_root", default=".harness/memory")
 
 
 def set_memory_root(path: str) -> None:
     """Point the memory tool at a different directory (default: .harness/memory).
 
-    Called once at startup by the interface, so it stays in sync with
+    Called at startup by the interface, so it stays in sync with
     Config.memory_dir / MemoryTracker without tool modules taking runtime
     config injected through their handler signatures (which would break the
     plain `(**kwargs) -> str` handler contract every other tool follows).
+    A ContextVar, not a global (D28): each session's execution context sees
+    its own memory root, so one user's agent can never resolve into
+    another's memory directory.
     """
-    global _ROOT
-    _ROOT = path
+    _ROOT.set(path)
 
 
 def _resolve(path: str) -> str:
-    """Confine `path` to the memory root. Raises ValueError if it escapes."""
-    root_abs = os.path.abspath(_ROOT)
-    candidate_abs = os.path.abspath(os.path.join(root_abs, path.lstrip("/")))
-    if candidate_abs != root_abs and not candidate_abs.startswith(root_abs + os.sep):
-        raise ValueError(f"path '{path}' escapes the memory directory")
-    return candidate_abs
+    """Confine `path` to the memory root (virtual-root semantics: a leading
+    "/" means the root itself). Raises ValueError if it escapes. Shares
+    engine/workspace.py's confinement logic (D27) so the memory tool's and
+    the workspace's traversal protection can't drift apart."""
+    try:
+        return confine(_ROOT.get(), path, treat_absolute_as_relative=True)
+    except ValueError:
+        raise ValueError(f"path '{path}' escapes the memory directory") from None
 
 
 def _view(path: str, view_range: list[int] | None) -> str:
@@ -125,6 +131,45 @@ def _rename(old_path: str, new_path: str) -> str:
         os.makedirs(directory, exist_ok=True)
     os.rename(old_full, new_full)
     return f"Renamed '{old_path}' -> '{new_path}'"
+
+
+def memory_overview(root: str | None = None, max_chars: int = 2_000) -> str:
+    """A capped digest of the memory directory for system-prompt injection
+    at session start (D31): the top-level listing plus the head of each
+    top-level text file, cut off at `max_chars` with a pointer to the
+    memory tool for the rest. Returns "" when there's nothing remembered,
+    so an empty memory adds zero prompt overhead.
+
+    This closes the gap between "the system prompt *tells* the model to
+    check memory" and "memory is actually in front of it": prior sessions'
+    notes now arrive without depending on the model deciding to call the
+    tool first."""
+    base = root if root is not None else _ROOT.get()
+    if not os.path.isdir(base):
+        return ""
+    parts: list[str] = []
+    try:
+        entries = sorted(os.listdir(base))
+    except OSError:
+        return ""
+    for name in entries:
+        full = os.path.join(base, name)
+        if os.path.isdir(full):
+            parts.append(f"[directory] {name}/ (use the memory tool to view)")
+            continue
+        try:
+            with open(full, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+        except (OSError, UnicodeDecodeError):
+            continue
+        if content:
+            parts.append(f"--- {name} ---\n{content}")
+    if not parts:
+        return ""
+    text = "\n\n".join(parts)
+    if len(text) > max_chars:
+        text = text[:max_chars] + "\n... [truncated -- use the memory tool's view command for the rest]"
+    return text
 
 
 _COMMANDS = {

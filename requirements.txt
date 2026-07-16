@@ -14,3 +14,6 @@ mcp>=1.2.0
 # without it, but the YAML feature silently no-ops if this is missing).
 pyyaml>=6.0
 
+# Relational store for users/sessions/usage (storage/, D29). SQLite by
+# default via HARNESS_DB_URL; the same code drives Postgres by URL swap.
+sqlalchemy>=2.0

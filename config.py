@@ -80,13 +80,20 @@ class Config:
     model: str = "anthropic/claude-opus-4-8"
     api_key: str | None = None
     base_url: str | None = None  # for OpenAI-compatible endpoints (Ollama, etc.)
+    # Optional second model to retry a failed call on (same credentials, so
+    # use a sibling model or a key-less local one). Unset = no fallback.
+    fallback_model: str | None = None
     permission_mode: str = "ask"  # ask | allowlist | auto
     max_steps: int = 25
-    max_tokens: int = 4096
+    # None = use the active model's known limit (providers/model_info.py),
+    # falling back to the historical 4096 default for unknown models.
+    max_tokens: int | None = None
     temperature: float = 0.0
     system_prompt: str = DEFAULT_SYSTEM_PROMPT
-    # Context management: fold old history into a summary past this token budget.
-    max_context_tokens: int = 100_000
+    # Context management: fold old history into a summary past this token
+    # budget. None = derive from the active model's known context window
+    # (providers/model_info.py), else the historical 100k default.
+    max_context_tokens: int | None = None
     keep_recent_messages: int = 20
     # Persistence / observability locations.
     sessions_dir: str = ".harness/sessions"
@@ -101,10 +108,34 @@ class Config:
     skills_config_path: str = ".harness/skills.json"
     # Where oversized tool output gets written instead of silently truncated.
     offload_dir: str = ".harness/offload"
-    # Where user accounts (username + salted/hashed password) are stored.
+    # Relational store for users, sessions, and usage accounting (D29).
+    # SQLite file by default; any SQLAlchemy URL works (e.g.
+    # postgresql+psycopg://... for Postgres) with no code change.
+    db_url: str = "sqlite:///.harness/harness.db"
+    # Legacy JSON account file -- read only by scripts/migrate_json_to_db.py.
     users_config_path: str = ".harness/users.json"
-    # Tavily API key for the web_search tool. Unset = no tool registered (D24).
+    # JWT scaffolding (D30): where the auto-generated signing secret lives
+    # when HARNESS_JWT_SECRET isn't set, and the token lifetime.
+    jwt_secret_path: str = ".harness/jwt_secret"
+    jwt_ttl_s: int = 7 * 24 * 3600
+    # Tavily API key for the web_search tool; unset = DuckDuckGo fallback (D25).
     search_api_key: str | None = None
+    # Workspace confinement (D27): when True, filesystem/shell tools are
+    # confined to workspaces/{user}/{session}/ and cannot reach outside it.
+    # Default False = the historical unconfined single-user CLI behavior.
+    confine_workspace: bool = False
+    # Root under which per-user, per-session workspaces are created.
+    workspace_dir: str = "workspaces"
+    # Sandbox (D33): "off" = run_command runs on the host (default); "docker"
+    # = run each session's commands inside a resource-limited, network-denied
+    # container mounting only that session's workspace. "docker" implies
+    # workspace confinement (the container has nothing else to mount).
+    sandbox: str = "off"
+    sandbox_image: str = "python:3.11-slim"
+    sandbox_memory: str = "2g"
+    sandbox_cpus: str = "2"
+    sandbox_pids: int = 256
+    sandbox_network: str = "none"  # "none" = default-deny egress; "bridge" allows
 
     def for_user(self, username: str) -> "Config":
         """A copy of this Config with per-user data directories namespaced by
@@ -126,6 +157,7 @@ class Config:
             memory_dir=os.path.join(self.memory_dir, username),
             logs_dir=os.path.join(self.logs_dir, username),
             offload_dir=os.path.join(self.offload_dir, username),
+            workspace_dir=os.path.join(self.workspace_dir, username),
         )
 
     @classmethod
@@ -144,9 +176,18 @@ class Config:
                 except Exception:
                     pass
 
+        def to_bool(value) -> bool:
+            # bool("false") is True, so string values need real parsing.
+            if isinstance(value, str):
+                return value.strip().lower() in ("true", "yes", "1")
+            return bool(value)
+
         def get_val(env_name: str, yaml_key: str, default, type_conv=None):
             env_val = os.getenv(env_name)
-            if env_val is not None:
+            # A blank env var (e.g. a `HARNESS_MAX_TOKENS=` line in a copied
+            # .env) means "unset", not "the empty string" -- otherwise
+            # type_conv=int would choke on int('') and crash startup.
+            if env_val is not None and env_val.strip() != "":
                 return type_conv(env_val) if type_conv else env_val
             yaml_val = yaml_data.get(yaml_key)
             if yaml_val is not None:
@@ -157,6 +198,7 @@ class Config:
             model=get_val("HARNESS_MODEL", "model", cls.model),
             api_key=get_val("HARNESS_API_KEY", "api_key", cls.api_key) or None,
             base_url=get_val("HARNESS_BASE_URL", "base_url", cls.base_url) or None,
+            fallback_model=get_val("HARNESS_FALLBACK_MODEL", "fallback_model", cls.fallback_model) or None,
             permission_mode=get_val("HARNESS_PERMISSION_MODE", "permission_mode", cls.permission_mode),
             max_steps=get_val("HARNESS_MAX_STEPS", "max_steps", cls.max_steps, int),
             max_tokens=get_val("HARNESS_MAX_TOKENS", "max_tokens", cls.max_tokens, int),
@@ -169,6 +211,17 @@ class Config:
             roles_config_path=get_val("HARNESS_ROLES_CONFIG", "roles_config_path", cls.roles_config_path),
             skills_config_path=get_val("HARNESS_SKILLS_CONFIG", "skills_config_path", cls.skills_config_path),
             offload_dir=get_val("HARNESS_OFFLOAD_DIR", "offload_dir", cls.offload_dir),
+            db_url=get_val("HARNESS_DB_URL", "db_url", cls.db_url),
             users_config_path=get_val("HARNESS_USERS_FILE", "users_config_path", cls.users_config_path),
+            jwt_secret_path=get_val("HARNESS_JWT_SECRET_PATH", "jwt_secret_path", cls.jwt_secret_path),
+            jwt_ttl_s=get_val("HARNESS_JWT_TTL", "jwt_ttl_s", cls.jwt_ttl_s, int),
             search_api_key=get_val("HARNESS_SEARCH_API_KEY", "search_api_key", cls.search_api_key) or None,
+            confine_workspace=get_val("HARNESS_CONFINE_WORKSPACE", "confine_workspace", cls.confine_workspace, to_bool),
+            workspace_dir=get_val("HARNESS_WORKSPACE_DIR", "workspace_dir", cls.workspace_dir),
+            sandbox=get_val("HARNESS_SANDBOX", "sandbox", cls.sandbox),
+            sandbox_image=get_val("HARNESS_SANDBOX_IMAGE", "sandbox_image", cls.sandbox_image),
+            sandbox_memory=get_val("HARNESS_SANDBOX_MEMORY", "sandbox_memory", cls.sandbox_memory),
+            sandbox_cpus=get_val("HARNESS_SANDBOX_CPUS", "sandbox_cpus", cls.sandbox_cpus),
+            sandbox_pids=get_val("HARNESS_SANDBOX_PIDS", "sandbox_pids", cls.sandbox_pids, int),
+            sandbox_network=get_val("HARNESS_SANDBOX_NETWORK", "sandbox_network", cls.sandbox_network),
         )

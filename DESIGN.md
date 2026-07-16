@@ -560,6 +560,286 @@ key. Accepted -- forcing configuration to get a real feature beats a
 default-on feature that's unreliable or requires committing to one specific
 provider's SDK.
 
+### D25 — One `web_search` tool, two backends (supersedes D24's registration rule)
+**Decision:** `engine/builtin/search.py`'s `build_search_tool(api_key)` is
+the only place a `web_search` tool comes from, and it is now **always**
+registered by both interfaces — with a Tavily key it calls the Tavily API
+(D24's reliable path), without one it falls back to the DuckDuckGo
+lite-HTML scraper, which moved to a plain exported function
+(`engine/builtin/web.py:duckduckgo_search`) and no longer self-registers.
+**Why:** the audit (AUDIT.md C4) found D24 was never fully landed: the old
+DuckDuckGo `web_search` still self-registered unconditionally on import,
+and when a Tavily key was set, `build_search_tool`'s registration
+silently *overwrote* it in the registry (last-write-wins, no notice) —
+the code contradicted D24's own "no key = no tool" claim. Rather than
+finishing D24 as written (delete the scraper) the owner chose to keep
+zero-config search as a real feature: one tool name, key-gated backend
+selection inside the handler, so the model sees exactly one `web_search`
+whose quality improves when a key is configured.
+**What this supersedes:** D24's "no key = no tool" registration rule.
+D24's other verdicts stand — scraping is unreliable (that's exactly why
+it's the fallback, not the primary), and a real search API with a real
+key is the preferred path.
+**Trade-off:** a zero-config install now exposes a search tool that can
+hit DuckDuckGo's bot detection and return junk — the model may waste a
+turn on a bad result where D24-as-written would have had no tool at all.
+Accepted: search-that-sometimes-degrades beat search-that-needs-setup for
+the owner's use, and offloading/`risk: dangerous` gating apply the same
+either way.
+
+### D26 — Transient-failure retries live inside each provider adapter
+**Decision:** `providers/retry.py`'s `call_with_retries` wraps the one SDK
+call in each adapter (`AnthropicProvider.complete`,
+`OpenAIProvider.complete`) with exponential backoff (3 attempts, 1s/2s)
+on that SDK's own rate-limit/connection/timeout/5xx exception types.
+`providers/fallback.py`'s `FallbackProvider` optionally wraps two whole
+providers — primary and `HARNESS_FALLBACK_MODEL` — behind the same
+one-method `Provider` interface. `providers/model_info.py` gives the
+factory and the `Conversation` construction sites per-model context
+windows and output limits (substring-matched like `PRICING`), used only
+when the user hasn't set `HARNESS_MAX_TOKENS`/`HARNESS_MAX_CONTEXT_TOKENS`
+explicitly; unknown models keep the historical 4096/100k defaults.
+**Why in the adapters and not the orchestrator:** the retryable exception
+types are SDK-specific (`anthropic.RateLimitError` vs
+`openai.RateLimitError`) — catching them in `engine/orchestrator.py` would
+mean the loop importing concrete provider SDKs, breaking D2. Each adapter
+already owns its SDK boundary; retrying there keeps the loop
+provider-blind, and `FallbackProvider` is invisible to it for the same
+reason (Liskov: it's just another `Provider`).
+**Trade-off:** both SDKs also retry internally (their clients' defaults),
+so a truly down API waits through two retry layers before failing —
+seconds, not minutes, and bounded. Accepted for the simplicity of not
+reconfiguring SDK internals. The fallback model reuses the primary's
+credentials, so cross-provider fallback (Anthropic primary → OpenAI
+fallback) needs the same key to be valid for both — in practice the
+useful pairs are same-provider (opus → haiku) or anything → local
+key-less (`ollama/...`); recorded rather than solved.
+
+### D27 — Workspace confinement is opt-in, shared with the memory tool's protection
+**Decision:** `engine/workspace.py` owns one confinement implementation:
+`confine(root, path)` (realpath-based, so symlinks can't smuggle access;
+rejects `../` traversal and outside absolute paths) plus a module-level
+root set per session by the interface. `HARNESS_CONFINE_WORKSPACE=true`
+(default **false**) makes `read_file`/`write_file`/`edit_file`/`list_dir`
+resolve every path inside `workspaces/{user}/{session}/` and pins
+`run_command`'s cwd there; escapes come back as error strings, never
+exceptions (PRINCIPLES rule 1). `context_engine/memory_tool.py`'s
+`_resolve` now delegates to the same `confine()` (virtual-root semantics
+preserved) instead of keeping its own copy.
+**Why opt-in instead of enforced:** the owner's explicit rollout decision
+(PLAN.md §5.4) — today's single-user CLI users read/write anywhere on disk
+on purpose, and a silent new restriction would break them; a future server
+interface sets the flag unconditionally per session, which is the actual
+target of this feature (AUDIT.md D1/D2: zero isolation was the sharpest
+gap vs. a framework default).
+**Why a module-level root:** same deliberate, startup-set global pattern
+as `set_memory_root`/`set_offload_root` — and like them it is scheduled to
+become session-scoped state in the global-state removal milestone
+(PLAN.md Milestone 3); building it session-scoped *now* would have meant
+doing half of that milestone early, out of order.
+**Trade-off:** confinement covers the built-in filesystem/shell tools, not
+MCP-server tools (a filesystem MCP server has its own allow-list) and not
+the host itself (`run_command` inside the workspace can still call
+anything on PATH — real host isolation is the sandbox's job, G1, designed
+in a later milestone). Recorded so nobody mistakes this for a sandbox.
+
+### D28 — Session-scoped state via ContextVars, not per-session tool closures
+**Decision:** the four pieces of module-level mutable state the audit
+flagged as multi-user blockers (AUDIT.md F3) — `context_engine/memory_tool.py`'s
+root, `engine/builtin/offload.py`'s root, `engine/workspace.py`'s root
+(added in D27), and `engine/builtin/planning.py`'s plan — are now
+`contextvars.ContextVar`s instead of plain globals. The `set_*` APIs are
+unchanged; they now write to the calling execution context. A thread (the
+shape a future server gives each session) automatically gets its own
+values; `multiagent/coordinator.py` runs each delegated sub-agent via
+`contextvars.copy_context().run(...)` with a fresh plan, which closes
+D23's recorded "sub-agents share the coordinator's plan" limitation
+structurally while leaving memory shared by design (D17).
+**Why ContextVars instead of the per-session tool-closure registry the
+plan sketched (PLAN.md Milestone 3):** closures would have required every
+session to assemble its own `Registry` and every root-consuming tool to
+be rebuilt per session — a large structural change touching registration
+everywhere. ContextVars achieve the same isolation with zero changes to
+tool handler signatures, zero changes to registration, identical
+single-threaded CLI behavior, and stdlib-only semantics that are also
+correct under asyncio (relevant for a future server). Deviation from the
+written plan, recorded here per PRINCIPLES rule 0.
+**What this does not fix:** the shared `registry` singleton's *visibility*
+(an MCP server one session connects is callable by every session in the
+process, D8/D14) — that is a tool-scoping question, not a state-corruption
+one, and is deferred to the server-phase work recorded in AUDIT.md F1.
+**Trade-off:** ContextVar state is invisible to code that doesn't know to
+look for it — a reader grepping for globals won't find the mutation the
+way an assignment to `_ROOT` used to show. Mitigated by keeping the same
+`set_*` entry points and documenting the pattern here and in each module's
+docstring.
+
+### D29 — Users and sessions move to a relational store behind one URL
+**Decision:** a new `storage/` package (SQLAlchemy) owns user accounts and
+session persistence: `users` (with integer `user_id` primary keys and a
+two-tier `admin`/`user` role — the first account ever created bootstraps
+as admin), `sessions` keyed by `(session_id, user_id)`, and a `usage_log`
+table (schema now, writer lands with admin monitoring in the next
+milestone). One connection string, `HARNESS_DB_URL`, picks the backend —
+default `sqlite:///.harness/harness.db` (zero ops), any
+`postgresql+psycopg://...` URL for Postgres with no code change.
+`DbUserStore`/`DbSessionStore` keep the old stores' public interfaces
+(`exists/register/verify/list_usernames`, `save/load/list_ids`) plus what
+JSON couldn't do: `delete()` (wired to a new `/delete <id>` command),
+real cross-user isolation at the query level (a store is *bound* to a
+user_id at construction — no query can reach another user's rows), and
+concurrent-write safety.
+**What was replaced vs. kept:** `context_engine/session_store.py` is
+deleted (replaced outright, per the plan decision — no caller depended on
+its module path but the CLI). `auth/users.py` keeps the PBKDF2
+`hash_password`/`verify_password` (the DB store uses them unchanged, so
+migrated hashes still verify) and keeps the JSON `UserStore` class marked
+LEGACY, as the read-side of `scripts/migrate_json_to_db.py` — the
+idempotent one-time migration that copies `.harness/users.json` accounts
+(hashes verbatim) and `.harness/sessions/<user>/*.json` snapshots into the
+database.
+**Why one snapshot blob per session instead of per-message rows:** resume
+always loads the whole history anyway; the blob is byte-identical to what
+the file store wrote, which makes migration an exact copy; and exploding
+to rows is a later, additive change if per-message queries ever matter.
+**Trade-off:** SQLAlchemy is the project's first ORM dependency (a
+recorded deviation from the stdlib-only bias of D3/D22 — accepted because
+hand-writing two dialects of SQL for a schema this small is worse), and
+SQLite remains single-writer; the Postgres URL swap is the documented
+answer once a concurrent server process exists.
+
+### D30 — Auth scaffolding (JWT) + admin usage monitoring
+**Decision:** two additions that together make the harness
+server-auth-ready and give the owner the requested admin oversight:
+- `auth/tokens.py` (PyJWT): `issue_token`/`verify_token` with `sub` =
+  integer user_id, `role`, `iat`, `exp` (config TTL, default 7 days),
+  signed by `HARNESS_JWT_SECRET` or an auto-generated secret persisted
+  0600 at `.harness/jwt_secret`. The CLI issues **and immediately
+  verifies** a token on every login — it doesn't need the token yet (one
+  process, one login), but exercising the exact round trip a server's
+  per-request middleware will run means the path can't rot, and the
+  claims carry precisely what downstream code is keyed by.
+- `observability/usage_store.py`: `PersistentUsageTracker` extends the
+  in-memory `UsageTracker` (which still powers `/cost` unchanged) to
+  insert one `usage_log` row per model call — user, session id and task
+  text *current at call time* (injected as callables, since both change
+  over a run), model, tokens, estimated cost. Inserts are best-effort
+  (accounting must never break a run, same rule as EventLogger). The
+  admin-only `/usage` (per-user totals) and `/usage <username>`
+  (per-session drill-down with last task) print the aggregation queries a
+  server's admin endpoints would serve verbatim; `/users` and
+  `/users role <name> <admin|user>` manage the two-tier role model, with
+  the last admin protected from demotion.
+**Why JWT over opaque DB tokens:** the owner's explicit choice (PLAN.md
+§5.3) — self-contained tokens a stateless server middleware can verify
+without a DB read; PyJWT is the accepted new dependency.
+**Trade-off:** the token is scaffolding, not yet a boundary — nothing in
+the CLI *requires* it after login, and role checks gate CLI commands, not
+storage APIs (a Python caller with the engine can query anything;
+process-level trust is unchanged from D22). The boundary becomes real in
+the server phase, which is exactly what this shape was built for.
+
+### D31 — Long-term memory is injected at session start, not just advertised
+**Decision:** `context_engine/memory_tool.py`'s `memory_overview(root,
+max_chars=2000)` builds a capped digest of the user's memory directory —
+each top-level file's contents, subdirectories listed by name only — and
+`Session._new_conversation` appends it to the system prompt under
+"## Your memory (notes from earlier sessions)" whenever it's non-empty.
+Empty memory adds zero prompt overhead.
+**Why:** the audit (E3) found the system prompt *instructed* the model to
+check memory, but nothing guaranteed prior notes were ever seen — it
+depended entirely on the model choosing to call the tool first. Injection
+closes that: what earlier sessions recorded is simply in front of the
+model from turn one, and the tool remains the way to read more (the
+digest truncates with an explicit pointer) or write updates.
+**Trade-off:** the digest spends prompt tokens on every session even when
+the memory is irrelevant to the task, and a loaded (`/load`) session keeps
+whatever prompt it was saved with rather than re-injecting current memory.
+Both accepted: the cap bounds the cost, and re-injecting into a restored
+conversation would rewrite history the summary/compaction may reference.
+
+### D32 — A hooks layer makes cross-cutting behavior pluggable
+**Decision:** `engine/hooks.py`'s `Hooks` dataclass carries four ordered
+lists of plain callables the orchestrator runs at fixed points:
+`pre_model_call(messages)`, `post_model_call(response)`,
+`pre_tool_call(tool_call, tool)` (return a string to veto — it becomes
+the tool result the model sees, same "denial is an observation" contract
+as D5/D6 — or the possibly-rewritten call to proceed), and
+`post_tool_call(tool_call, result)`. Injected through `Orchestrator`'s
+constructor like every other collaborator; an empty `Hooks()` (the
+default everywhere today) leaves the loop byte-for-byte identical.
+**Why this is the sanctioned edit to the loop:** AGENTS.md's rule is
+"you should almost never edit `engine/orchestrator.py`" — and the audit
+(H5) showed that rule was being *violated in spirit* by every
+cross-cutting concern already in the loop: compaction and permissions are
+baked in because there was nowhere else to put them. This change adds the
+extension point itself, so the *next* guardrail, redaction pass, or
+context injector is a new file + a `Hooks(...)` argument, not another
+edit. Compaction and permissions are deliberately NOT retrofitted onto
+the mechanism — they work, they're tested, and churning them for purity
+buys nothing (PRINCIPLES rule 8).
+**Trade-off:** hooks are power tools — a badly written pre_model hook can
+corrupt history, and hook errors are not swallowed (unlike tool errors)
+because a broken guardrail failing open would be worse than a crash.
+Accepted and documented rather than defended against.
+
+### D33 — Sandbox implemented: Docker-container-per-session command execution
+**Decision:** `engine/sandbox.py` runs `run_command` inside a per-session
+Docker container when `HARNESS_SANDBOX=docker` (default `off` = host
+execution, unchanged). The container mounts **only** that session's D27
+workspace (at `/workspace`, the workdir), with `--memory`/`--cpus`/
+`--pids-limit`, `--cap-drop=ALL`, `--security-opt=no-new-privileges`,
+`--read-only` rootfs (+ a writable `/tmp` tmpfs and the writable workspace),
+and `--network=none` by default. `SandboxManager` shells out to the `docker`
+CLI (no new dependency — same choice as MCPManager/worktree), keyed
+internally by workspace path (one container per session), created on the
+first command and reused via `docker exec` for the rest, torn down on
+session end (wired into `interfaces/cli.py`'s existing `finally`).
+`HARNESS_SANDBOX=docker` forces `confine_workspace=True` — the container has
+nothing else to mount — and verifies the daemon at startup so a broken
+Docker fails loud (PRINCIPLES rule 2), while a per-command container failure
+degrades to an error string (rule 1). This is the **second** gate under the
+permission layer (D5), not a replacement: a `dangerous` tool still
+prompts/denies per mode, and the container bounds what the command can reach
+once it runs.
+**Deviation from SANDBOX_DESIGN.md (recorded per PRINCIPLES rule 0):**
+persistent container per session (`docker run -d ... sleep infinity` +
+`docker exec`) rather than fresh-per-command, so installed packages and
+state survive within a session like a real shell; the egress-proxy
+allowlist stays deferred (default-deny `--network=none` is the shipped
+baseline, `HARNESS_SANDBOX_NETWORK=bridge` the escape hatch).
+**Trade-off:** requires Docker on the host and only sandboxes
+`run_command` (MCP/`fetch_url` run in-process under the permission layer, as
+designed); Windows needs WSL2-backed Docker. Verified by
+`tests/sandbox_test.py` (fake-runner unit tier + a real-container
+integration tier) and a live end-to-end CLI run.
+
+### D34 — The HTTP API server: multi-user made real and enforced
+**Decision:** `interfaces/server.py` (FastAPI) is a second interface next to
+the CLI, turning the server-ready pieces from the milestones into an
+actually-enforced runtime. A `HTTPBearer` dependency verifies the JWT
+(`auth/tokens.py`) on **every** `/sessions` and `/admin` request and yields
+the `(user_id, role)`; that `user_id` is the only key used to build
+`DbSessionStore(engine, user_id)` and `Config.for_user`, so one user's token
+cannot reach another user's rows or files. Each turn runs in
+`contextvars.copy_context()` with per-user memory/offload/workspace roots
+(D28), so concurrent requests never cross. Endpoints: register/login/me,
+list/create/delete sessions, post-message (one `Orchestrator.run`), admin
+usage, health.
+**Why a thin interface, not a rewrite:** this is exactly D7's promise -- the
+core takes an `approver` + runs a loop, ignorant of who calls it. The server
+supplies its own approver and reuses `Orchestrator`, `DbUserStore`,
+`DbSessionStore`, `auth/tokens.py`, and `Config.for_user` **unchanged**. The
+9 milestones existed to make this possible; the server is ~300 lines on top.
+**Trade-off / current scope:** an HTTP turn has no human, so an `ask`
+permission decision is denied (fail-safe) -- run in `allowlist`; streaming
+responses and human-in-the-loop approval over HTTP are the next milestones
+(see VERIFICATION.md Phase 5). Deployment is `Dockerfile` +
+`docker-compose.yml` (API + Postgres); the command sandbox needs a Docker
+socket/DinD and is off in the default compose. Verified by
+`tests/server_test.py` (TestClient: auth enforcement, cross-user isolation,
+a real turn, admin gating) and a live uvicorn run driven with curl.
+
 ---
 
 ## Known limitations & future work
@@ -568,10 +848,11 @@ provider's SDK.
   heuristic (`estimate_tokens`) is approximate; the actual per-turn usage from
   the API is exact and used for cost. Good enough to decide *when* to compact.
 - **Prices drift:** `PRICING` in `observability/usage.py` is manually maintained.
-- **Per-user, but still single-writer, JSON persistence:** D22 namespaces
-  sessions/memory/logs/offload by username so different users don't collide,
-  but each user's own store is still the JSON-file `SessionStore` from D12 --
-  no concurrent-write protection *within* one account.
+- ~~**Per-user, but still single-writer, JSON persistence**~~ — fixed by
+  D29: users and sessions live in the relational store (SQLite locally,
+  Postgres by URL swap), with per-user isolation enforced at the query
+  level and real concurrent-write safety. Memory, logs, offload, and
+  workspaces intentionally remain files on disk.
 - **Auth is real hashing, not a security boundary:** see D22's trade-off --
   no encryption at rest, no session tokens/expiry, no password reset, and
   filesystem access to `.harness/users.json` or the running process reads
@@ -580,12 +861,13 @@ provider's SDK.
   in order. Fine for correctness; a future optimization could parallelize
   independent, read-only calls.
 - **Coarse risk model:** see D5.
-- **Web search needs a Tavily key:** `web_search` (D24) is opt-in on
-  `HARNESS_SEARCH_API_KEY` and only supports one provider; no key means the
-  tool simply isn't there.
-- **The planning tool's state isn't sub-agent-scoped:** see D23's trade-off
-  — a `delegate`-spawned sub-agent shares the coordinator's `todo_write`/
-  `todo_read` state, since `FilteredRegistry` only hides `delegate` itself.
+- **Web search without a key is best-effort:** `web_search` (D25) always
+  exists, but the key-less DuckDuckGo fallback can hit bot detection or
+  return empty results; set `HARNESS_SEARCH_API_KEY` for the reliable
+  Tavily path.
+- ~~**The planning tool's state isn't sub-agent-scoped**~~ — fixed by D28:
+  sub-agents run in a copied context with a fresh plan; the coordinator's
+  checklist can no longer be overwritten by a delegated sub-agent.
 - **Pipeline runs one slice at a time:** no parallel worktrees yet. Real
   parallelism needs separate OS processes (not just threads, since `_cwd`
   chdir is process-global) — a bigger step, left for a follow-up.

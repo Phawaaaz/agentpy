@@ -11,6 +11,7 @@ minimal and grow into a company-wide coding + automation assistant.
 - [DESIGN.md](DESIGN.md) — the key decisions and why (ADR-style)
 - [PRINCIPLES.md](PRINCIPLES.md) — SOLID + best practices this code must follow, with a PR checklist
 - [CONTRIBUTING.md](CONTRIBUTING.md) — step-by-step: add a tool, a provider, or an interface
+- [SANDBOX_DESIGN.md](SANDBOX_DESIGN.md) — the design + build record for containerized command execution (D33)
 
 ## Architecture
 
@@ -47,6 +48,11 @@ HARNESS_API_KEY=sk-...
 
 Known prefixes: `anthropic/`, `openai/`, `openrouter/`, `groq/`, `together/`,
 `ollama/`. Any other OpenAI-compatible server works by setting `HARNESS_BASE_URL`.
+
+Transient failures (rate limits, dropped connections) are retried with
+exponential backoff inside each provider adapter. Optionally set
+`HARNESS_FALLBACK_MODEL` to a second model to retry a still-failing call on
+(same credentials — use a sibling model or a key-less local one).
 
 To switch models without restarting, use `/model <name>` inside a running
 session (e.g. `/model ollama/llama3.2:3b`) — it rebuilds the provider and
@@ -94,7 +100,10 @@ Two independent pieces (see DESIGN.md D16 for why they're separate):
   `.harness/memory/activity.md` up to date with the current task, files
   touched, and tool usage counts. Check it anytime with `/memory`.
 
-Both write into `HARNESS_MEMORY_DIR` (default `.harness/memory`).
+Both write into `HARNESS_MEMORY_DIR` (default `.harness/memory`). At the
+start of every new session, a capped digest of your memory directory is
+injected into the system prompt automatically (DESIGN.md D31) — the agent
+sees prior notes without having to think to look for them.
 
 ## Skills
 
@@ -140,12 +149,13 @@ in its own reasoning — each step tracked as `pending`/`in_progress`/
 
 ## Web search
 
-Set `HARNESS_SEARCH_API_KEY` to a [Tavily](https://tavily.com) API key (free
-tier available) to enable the `web_search` tool. Unlike the other built-in
-tools, it's opt-in: with no key set, the tool simply isn't registered,
-rather than being present and always failing. Use it for current
-information not in the model's training data; `fetch_url` is still what you
-want for a URL you already know.
+The `web_search` tool is always available, with two backends behind the one
+name: set `HARNESS_SEARCH_API_KEY` to a [Tavily](https://tavily.com) API key
+(free tier available) for reliable results, or leave it unset and the tool
+falls back to scraping DuckDuckGo — works with zero configuration, just
+less reliably (bot-detection pages, occasional empty results). Use it for
+current information not in the model's training data; `fetch_url` is still
+what you want for a URL you already know.
 
 ## Large tool output
 
@@ -182,19 +192,120 @@ Inside the CLI, lines starting with `/` are commands (everything else is a task)
 | `/new` | Start a fresh conversation |
 | `/save [id]` | Save the current session |
 | `/load <id>` | Resume a saved session |
+| `/delete <id>` | Delete a saved session |
 | `/sessions` | List saved sessions |
 | `/cost` | Show token usage + estimated cost |
 | `/memory` | Show what the harness has been working on |
 | `/model` | Show the current model |
 | `/model <name>` | Switch model mid-session, e.g. `/model ollama/llama3.2:3b` (conversation history kept) |
-| `/whoami` | Show the logged-in user |
+| `/whoami` | Show the logged-in user and role |
+| `/usage [username]` | Admin only: token/cost usage per user, or one user's sessions + tasks |
+| `/users` | Admin only: list accounts and roles |
+| `/users role <u> <r>` | Admin only: promote/demote an account |
 | `/review`, `/verify`, `/test`, `/docs` | Run a pipeline stage's prompt on demand (skills) |
 | `/roles` | List configured sub-agent roles (`delegate` target) |
 | `/help` | List commands |
 
-Sessions auto-save after each turn to `.harness/sessions/`; events are traced to
-`.harness/logs/`. Long conversations are automatically compacted (older messages
+Sessions auto-save after each turn to the relational store (`HARNESS_DB_URL`,
+default a SQLite file at `.harness/harness.db`; point it at Postgres for a
+multi-user server — no code change). Events are traced to `.harness/logs/`.
+Upgrading from an older checkout with JSON-file sessions/accounts? Run
+`python scripts/migrate_json_to_db.py` once — passwords and history carry
+over exactly. Long conversations are automatically compacted (older messages
 summarized) so they don't overflow the model's context window.
+
+## Workspace confinement (opt-in)
+
+Set `HARNESS_CONFINE_WORKSPACE=true` to confine the filesystem tools and
+`run_command` to a per-user, per-session directory
+(`workspaces/{user}/{session}/`) — `../` traversal, outside absolute paths,
+and symlink escapes are all rejected. Off by default: the single-user CLI
+historically works directly in whatever directory you launch it from, and
+that stays the default. This is a path boundary; for true host isolation of shell commands, turn on
+the sandbox below.
+
+## Sandbox (opt-in, needs Docker)
+
+Set `HARNESS_SANDBOX=docker` to run every `run_command` inside a per-session
+Docker container that mounts **only** that session's workspace, with memory/
+CPU/PID limits, dropped capabilities, a read-only rootfs, and networking
+denied by default (`HARNESS_SANDBOX_NETWORK=bridge` to allow it). It implies
+workspace confinement and verifies the Docker daemon at startup (failing
+loud if it's unreachable). The permission layer stays the first gate; the
+container is a second, independent one. Off by default — commands run on the
+host. See [SANDBOX_DESIGN.md](SANDBOX_DESIGN.md) and DESIGN.md D33.
+
+## Admin monitoring
+
+The first account ever created becomes the **admin**; everyone after is a
+regular user (an admin can promote/demote with `/users role <name>
+<admin|user>` — the last admin can't be demoted). Every model call is
+durably logged (user, session, model, tokens, estimated cost, and the task
+text), so an admin can answer "who is spending tokens, and on what":
+`/usage` shows per-user totals, `/usage <username>` shows that user's
+sessions with their last task. Regular users still see their own session's
+`/cost`. On login the CLI also issues and verifies a JWT (see DESIGN.md
+D30) — scaffolding the future server's per-request auth will reuse as-is.
+
+## HTTP API server (multi-user)
+
+Beyond the CLI, the harness runs as an HTTP API (`interfaces/server.py`, FastAPI)
+that turns the multi-user design into an enforced runtime: **every request
+carries a JWT**, and the `user_id` it verifies is the only key used to reach
+storage, so one user's token cannot touch another's data.
+
+```bash
+pip install -r requirements.txt -r requirements-server.txt
+export HARNESS_MODEL=anthropic/claude-opus-4-8 HARNESS_API_KEY=sk-...
+export HARNESS_JWT_SECRET=$(python3 -c "import secrets;print(secrets.token_hex(32))")
+uvicorn interfaces.server:app --host 0.0.0.0 --port 8000   # or: python main_server.py
+```
+
+Endpoints: `POST /auth/register`, `POST /auth/login` (→ JWT), `GET /auth/me`;
+`GET/POST /sessions`, `DELETE /sessions/{id}`, `POST /sessions/{id}/messages`
+(runs one agent turn), `POST /sessions/{id}/messages/stream` (the same turn
+as **Server-Sent Events** — `thinking`/`tool_call`/`tool_result`/`answer`
+events arrive live so a UI isn't blocked); admin-only
+`GET /admin/usage[/{username}]`; `GET /health`.
+
+Notes:
+- The first registered account becomes **admin**. Auth is now enforced
+  per-request (unlike the CLI's login scaffolding).
+- **Human-in-the-loop approval** works over the streaming endpoint: in
+  `ask` mode, a write/dangerous tool emits an `approval_required` SSE event
+  and the turn blocks until the client resolves it with
+  `POST /sessions/{id}/approvals/{approval_id}` (`{"approved": true|false}`);
+  `GET /sessions/{id}/approvals` lists what's pending. No decision within
+  the timeout → denied (fail-safe). In `allowlist` mode nothing needs
+  approving. Non-streaming turns still deny `ask` (no channel to ask).
+- Streaming is event-level (thinking / tool calls / final answer stream
+  live); token-by-token model output would need provider-level streaming, a
+  later addition.
+- Each request runs in an isolated execution context (D28): memory/offload/
+  workspace roots are per-user, so concurrent requests never cross.
+
+### Deploy
+
+`Dockerfile` + `docker-compose.yml` bring up the API plus Postgres:
+
+```bash
+cp .env.example .env    # set HARNESS_API_KEY, HARNESS_JWT_SECRET, POSTGRES_PASSWORD
+docker compose up --build
+```
+
+The compose file points `HARNESS_DB_URL` at Postgres and sets safe server
+defaults (`HARNESS_CONFINE_WORKSPACE=true`, `allowlist`). The container-based
+command sandbox (`HARNESS_SANDBOX=docker`) needs an external Docker daemon;
+enable it with the isolated dind-sidecar override:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.sandbox.yml up --build
+```
+
+See **[DEPLOY.md](DEPLOY.md)** for the full deployment guide — the three ways
+to give the sandbox a Docker daemon (host socket vs. dind sidecar vs.
+running on a Docker host), getting Docker on a fresh box, and a production
+checklist.
 
 ## Permission modes (set `HARNESS_PERMISSION_MODE` in `.env`)
 
@@ -219,7 +330,18 @@ python tests/offload_test.py        # oversized output -> file + preview, not lo
 python tests/model_switch_test.py   # /model command, history preserved across a switch
 python tests/auth_test.py           # password hashing, UserStore, login flow, per-user dirs
 python tests/planning_test.py       # todo_write/todo_read checklist tool
-python tests/search_test.py         # web_search formatting, error handling, mocked urlopen
+python tests/search_test.py         # web_search: Tavily + DuckDuckGo fallback, mocked urlopen
+python tests/retry_test.py          # transient-error retry/backoff + FallbackProvider
+python tests/model_info_test.py     # per-model window/output limits, factory wiring
+python tests/config_yaml_test.py    # .harness.yaml config + pipeline auto-push/PR
+python tests/workspace_test.py      # opt-in workspace confinement (D27)
+python tests/concurrency_test.py    # two sessions, zero state leakage (D28)
+python tests/storage_test.py        # DB users/sessions, isolation, JSON->DB migration (D29)
+python tests/token_test.py          # JWT issue/verify/expiry/tamper (D30)
+python tests/usage_store_test.py    # durable usage rows + admin gating (D30)
+python tests/hooks_test.py          # pre/post model+tool interception points (D32)
+python tests/search_files_test.py   # find_files/grep_files, git_commit, event latency
+python tests/sandbox_test.py         # Docker sandbox: isolation flags + gated real-container run (D33)
 ```
 
-All thirteen run against fakes — no key, no network — and should print `... PASSED`.
+All twenty-four run against fakes — no key, no network — and should print `... PASSED`.

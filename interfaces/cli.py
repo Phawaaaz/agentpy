@@ -8,14 +8,14 @@ session; anything else is a task for the agent.
 
 import getpass
 import os
+import shutil
 from dataclasses import replace
 from datetime import datetime
 
-from auth.users import UserStore
+from auth.tokens import issue_token, load_or_create_secret, verify_token
 from config import Config
 from context_engine.compaction import Conversation, make_provider_summarizer
 from context_engine.memory_tracker import MemoryTracker
-from context_engine.session_store import SessionStore
 from engine.mcp_client import MCPManager, load_server_configs
 from engine.orchestrator import Orchestrator
 from engine.registry import Tool, registry
@@ -23,10 +23,16 @@ from multiagent.coordinator import build_delegate_tool
 from multiagent.roles import load_roles
 from observability.log import EventLogger
 from observability.usage import UsageTracker
+from observability.usage_store import PersistentUsageTracker, usage_by_user, usage_for_user
 from pipeline import stages, worktree
 from pipeline.external_skills import load_external_skills
 from providers.base import ToolCall
 from providers.factory import OPENAI_COMPATIBLE, build_provider
+from providers.model_info import effective_context_budget
+from storage.db import make_engine
+from storage.models import ROLE_ADMIN
+from storage.session_store import DbSessionStore
+from storage.user_store import DbUserStore
 
 # Importing these modules registers their tools onto the shared registry.
 import context_engine.memory_tool  # noqa: F401
@@ -35,20 +41,28 @@ import engine.builtin.git_tool  # noqa: F401
 import engine.builtin.github_tool  # noqa: F401
 import engine.builtin.offload
 import engine.builtin.planning
+import engine.builtin.search_files  # noqa: F401
 import engine.builtin.shell  # noqa: F401
 import engine.builtin.web  # noqa: F401
+import engine.sandbox
+import engine.workspace
 from engine.builtin.search import build_search_tool
+from engine.sandbox import SandboxConfig
 
 HELP = """commands:
   /new                 start a fresh conversation
   /save [id]           save the current session (default id = current)
   /load <id>           load a saved session
+  /delete <id>         delete a saved session
   /sessions            list saved sessions
   /cost                show token usage and estimated cost
   /memory              show what the harness has been working on
   /model               show the current model
   /model <name>        switch model mid-session (conversation history kept)
-  /whoami              show the logged-in user
+  /whoami              show the logged-in user and role
+  /usage [username]    admin only: token/cost usage per user (or one user's sessions)
+  /users               admin only: list accounts and roles
+  /users role <u> <r>  admin only: promote/demote an account (admin|user)
   /mcp                 list connected MCP servers and their tools
   /mcp connect <name>  connect a server from the MCP config file
   /mcp disconnect <n>  disconnect a server and remove its tools
@@ -113,7 +127,7 @@ def _make_event_handler(*listeners):
             name, arguments = details
             print(f"\n\U0001f527 {name}({_format_args(arguments)})")
         elif kind == "tool_result":
-            _name, result = details
+            _name, result, *_timing = details  # trailing duration_ms (I1)
             preview = result if len(result) <= 300 else result[:300] + " ..."
             indented = "\n".join("     " + line for line in preview.splitlines())
             print(indented or "     (no output)")
@@ -129,20 +143,55 @@ def _make_event_handler(*listeners):
 class Session:
     """Bundles the mutable per-session objects the CLI juggles."""
 
-    def __init__(self, config: Config, provider, on_event, username: str = ""):
+    def __init__(
+        self,
+        config: Config,
+        provider,
+        on_event,
+        username: str = "",
+        role: str = "",
+        usage_tracker: UsageTracker | None = None,
+    ):
         self.config = config
         self.provider = provider
         self.on_event = on_event
         self.username = username
-        self.usage = UsageTracker()
+        self.role = role
+        self.usage = usage_tracker or UsageTracker()
         self.id = datetime.now().strftime("%Y%m%d-%H%M%S")
         self.conversation = self._new_conversation()
         self.agent = self._new_agent()
+        self.apply_workspace_root()
+
+    def apply_workspace_root(self) -> None:
+        """Point tool confinement at this session's own workspace directory
+        (workspaces/{user}/{session}/) when confinement is on (D27); a no-op
+        root (None) otherwise. Re-called whenever the session id changes."""
+        if self.config.confine_workspace:
+            engine.workspace.set_workspace_root(
+                os.path.join(self.config.workspace_dir, self.id)
+            )
+        else:
+            engine.workspace.set_workspace_root(None)
 
     def _new_conversation(self) -> Conversation:
+        # Memory injection (D31): what earlier sessions remembered arrives
+        # in the system prompt at session start, capped so it can't blow
+        # the context budget -- instead of relying on the model choosing
+        # to call the memory tool before it acts.
+        system_prompt = self.config.system_prompt
+        overview = context_engine.memory_tool.memory_overview(self.config.memory_dir)
+        if overview:
+            system_prompt += (
+                "\n\n## Your memory (notes from earlier sessions)\n"
+                f"{overview}\n"
+                "(Read more or update it with the memory tool.)"
+            )
         return Conversation(
-            self.config.system_prompt,
-            max_context_tokens=self.config.max_context_tokens,
+            system_prompt,
+            max_context_tokens=effective_context_budget(
+                self.config.model, self.config.max_context_tokens
+            ),
             keep_recent_messages=self.config.keep_recent_messages,
             summarizer=make_provider_summarizer(self.provider),
         )
@@ -163,6 +212,7 @@ class Session:
         self.conversation = self._new_conversation()
         self.agent = self._new_agent()
         engine.builtin.planning.reset_plan()
+        self.apply_workspace_root()
 
     def rebuild_agent(self) -> None:
         self.agent = self._new_agent()
@@ -245,7 +295,7 @@ def _handle_skill_command(
     stage: str,
     args: list[str],
     session: Session,
-    store: SessionStore,
+    store: DbSessionStore,
     memory_tracker: MemoryTracker,
     skills: dict,
 ) -> None:
@@ -270,14 +320,86 @@ def _handle_skill_command(
     store.save(session.id, session.conversation)
 
 
+def _handle_usage_command(args: list[str], session: Session, db_engine) -> None:
+    """Admin-only: /usage (all users) or /usage <username> (drill-down).
+    These queries are exactly what a server's admin endpoints would serve."""
+    if session.role != ROLE_ADMIN:
+        print("only an admin can view usage across users (your own session: /cost)")
+        return
+    if not args:
+        rows = usage_by_user(db_engine)
+        if not rows:
+            print("(no usage recorded yet)")
+            return
+        for r in rows:
+            total = r["prompt_tokens"] + r["completion_tokens"]
+            print(
+                f"  {r['username']}: {r['calls']} calls | "
+                f"{r['prompt_tokens']} in + {r['completion_tokens']} out = {total} tokens | "
+                f"est. ${r['cost_usd']:.4f}"
+            )
+        return
+    rows = usage_for_user(db_engine, args[0])
+    if not rows:
+        print(f"(no usage recorded for '{args[0]}')")
+        return
+    for r in rows:
+        total = r["prompt_tokens"] + r["completion_tokens"]
+        print(
+            f"  session {r['session_id']}: {r['calls']} calls | {total} tokens | "
+            f"est. ${r['cost_usd']:.4f}\n"
+            f"    last task: {r['last_task']}"
+        )
+
+
+def _handle_users_command(args: list[str], session: Session, user_store: DbUserStore) -> None:
+    """Admin-only: /users (list accounts + roles) or /users role <name> <role>."""
+    if session.role != ROLE_ADMIN:
+        print("only an admin can manage users")
+        return
+    if not args:
+        for username, role in user_store.list_users():
+            print(f"  {username}: {role}")
+        return
+    if args[0] == "role" and len(args) == 3:
+        try:
+            user_store.set_role(args[1], args[2])
+        except ValueError as exc:
+            print(f"  {exc}")
+            return
+        print(f"  {args[1]} is now {args[2]}")
+        return
+    print("usage: /users | /users role <name> <admin|user>")
+
+
+def _delete_session_workspace(config: Config, session_id: str) -> None:
+    """Remove a deleted session's on-disk workspace directory so /delete
+    actually purges the session's files, not just its conversation row.
+    (Memory is per-user, not per-session, so it is intentionally left; the
+    content-hashed offload dir is shared and not per-session either.) The
+    session_id is sanitized the same way the workspace path is built."""
+    safe = "".join(c for c in session_id if c.isalnum() or c in ("-", "_"))
+    if not safe:
+        return
+    path = os.path.join(config.workspace_dir, safe)
+    # Confine the delete to under workspace_dir -- never let a crafted id
+    # escape it (defence in depth; safe already strips separators).
+    root = os.path.abspath(config.workspace_dir)
+    target = os.path.abspath(path)
+    if target != root and target.startswith(root + os.sep) and os.path.isdir(target):
+        shutil.rmtree(target, ignore_errors=True)
+
+
 def _handle_command(
     text: str,
     session: Session,
-    store: SessionStore,
+    store: DbSessionStore,
     mcp_manager: MCPManager,
     memory_tracker: MemoryTracker,
     roles: dict,
     skills: dict,
+    user_store: DbUserStore | None = None,
+    db_engine=None,
 ) -> bool:
     """Handle a /command. Returns True if input was a command (handled)."""
     if not text.startswith("/"):
@@ -302,7 +424,18 @@ def _handle_command(
             session.id = args[0]
             session.rebuild_agent()
             engine.builtin.planning.reset_plan()
+            session.apply_workspace_root()
             print(f"loaded session: {args[0]}")
+        else:
+            print(f"no such session: {args[0]}")
+    elif cmd == "/delete":
+        if not args:
+            print("usage: /delete <id>")
+        elif args[0] == session.id:
+            print("that's the active session -- /new first, then /delete it")
+        elif store.delete(args[0]):
+            _delete_session_workspace(session.config, args[0])
+            print(f"deleted session: {args[0]}")
         else:
             print(f"no such session: {args[0]}")
     elif cmd == "/sessions":
@@ -315,7 +448,12 @@ def _handle_command(
     elif cmd == "/model":
         _handle_model_command(args, session)
     elif cmd == "/whoami":
-        print(session.username or "(not logged in)")
+        who = session.username or "(not logged in)"
+        print(f"{who} ({session.role})" if session.role else who)
+    elif cmd == "/usage":
+        _handle_usage_command(args, session, db_engine)
+    elif cmd == "/users":
+        _handle_users_command(args, session, user_store)
     elif cmd == "/mcp":
         _handle_mcp_command(args, mcp_manager, session.config)
     elif cmd == "/roles":
@@ -340,15 +478,14 @@ def _connect_configured_mcp_servers(mcp_manager: MCPManager, config: Config) -> 
             print(f"  mcp '{server.name}': failed to connect ({exc})")
 
 
-def _login(users_config_path: str, max_attempts: int = 3) -> str:
-    """Authenticate a user against `users_config_path`, registering a new
+def _login(store: DbUserStore, max_attempts: int = 3) -> str:
+    """Authenticate a user against the account store, registering a new
     account on first sight of a username. Returns the logged-in username.
 
     `HARNESS_USER`/`HARNESS_PASSWORD` skip the interactive prompt (for
     scripted/demo use, same "env var first" convention as the rest of
     Config.load()); with only `HARNESS_USER` set, the username is
     pre-filled but the password is still prompted for."""
-    store = UserStore(users_config_path)
     env_user = os.getenv("HARNESS_USER")
     env_password = os.getenv("HARNESS_PASSWORD")
     if env_user and env_password:
@@ -390,8 +527,41 @@ def _login(users_config_path: str, max_attempts: int = 3) -> str:
 
 def main() -> None:
     config = Config.load()
-    username = _login(config.users_config_path)
+    db_engine = make_engine(config.db_url)
+    user_store = DbUserStore(db_engine)
+    username = _login(user_store)
+    user_id = user_store.user_id(username)
+    role = user_store.role(username) or ""
+
+    # Token scaffolding (D30): issue a JWT for this login and verify it
+    # immediately -- the same round trip a server's per-request middleware
+    # will run. The CLI doesn't require the token afterwards (one process,
+    # one login), but the path is exercised on every start, so it can't rot.
+    secret = load_or_create_secret(config.jwt_secret_path)
+    claims = verify_token(issue_token(user_id, role, secret, config.jwt_ttl_s), secret)
+    assert claims == {"user_id": user_id, "role": role}  # setup error if not (fail loud)
+
     config = config.for_user(username)
+
+    # Sandbox (D33): "docker" runs commands in a per-session container and
+    # requires workspace confinement (that's all the container mounts). We
+    # force confinement on rather than silently running unsandboxed, and
+    # verify the daemon now so a broken Docker fails loud at startup.
+    if config.sandbox == "docker":
+        config = replace(config, confine_workspace=True)
+        try:
+            engine.sandbox.configure(
+                SandboxConfig(
+                    image=config.sandbox_image,
+                    memory=config.sandbox_memory,
+                    cpus=config.sandbox_cpus,
+                    pids=config.sandbox_pids,
+                    network=config.sandbox_network,
+                )
+            )
+        except engine.sandbox.SandboxError as exc:
+            raise SystemExit(f"sandbox startup failed: {exc}")
+
     provider = build_provider(config)
     run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
 
@@ -423,14 +593,25 @@ def main() -> None:
             )
         )
 
-    # Web search is opt-in too: no HARNESS_SEARCH_API_KEY means no
-    # `web_search` tool, rather than a tool that's always present but
-    # always errors (same shape as the `delegate` tool above).
-    if config.search_api_key:
-        registry.register(build_search_tool(config.search_api_key))
+    # Web search is always available: Tavily when HARNESS_SEARCH_API_KEY is
+    # set, a key-less DuckDuckGo fallback otherwise (one tool, two backends
+    # -- D25).
+    registry.register(build_search_tool(config.search_api_key))
 
-    session = Session(config, provider, on_event, username=username)
-    store = SessionStore(config.sessions_dir)
+    # Durable usage accounting (D30): every model call becomes one
+    # usage_log row attributed to this user, the session id current at
+    # call time, and the task the user gave -- what /usage aggregates.
+    usage_tracker = PersistentUsageTracker(
+        db_engine,
+        user_id,
+        session_id_fn=lambda: session.id,
+        task_fn=lambda: memory_tracker.task,
+    )
+    session = Session(
+        config, provider, on_event,
+        username=username, role=role, usage_tracker=usage_tracker,
+    )
+    store = DbSessionStore(db_engine, user_id)
     mcp_manager = MCPManager(registry)
 
     print("=" * 60)
@@ -459,7 +640,10 @@ def main() -> None:
             if user_input.lower() in ("quit", "exit", "q"):
                 print("bye")
                 return
-            if _handle_command(user_input, session, store, mcp_manager, memory_tracker, roles, skills):
+            if _handle_command(
+                user_input, session, store, mcp_manager, memory_tracker,
+                roles, skills, user_store=user_store, db_engine=db_engine,
+            ):
                 continue
 
             memory_tracker.set_task(user_input)
@@ -474,6 +658,7 @@ def main() -> None:
             store.save(session.id, session.conversation)  # auto-save after each turn
     finally:
         mcp_manager.disconnect_all()
+        engine.sandbox.shutdown()  # tear down any per-session containers
 
 
 if __name__ == "__main__":

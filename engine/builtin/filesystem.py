@@ -6,6 +6,7 @@ Importing this module registers the tools onto the shared registry.
 import os
 
 from ..registry import Tool, registry
+from ..workspace import resolve
 from .offload import maybe_offload
 
 _MAX_OUTPUT = 20_000  # keep tool output from blowing up the context window
@@ -13,8 +14,11 @@ _MAX_OUTPUT = 20_000  # keep tool output from blowing up the context window
 
 def read_file(path: str) -> str:
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        full = resolve(path)
+        with open(full, "r", encoding="utf-8") as f:
             content = f.read()
+    except ValueError as exc:  # escaped the confined workspace (D27)
+        return f"Error: {exc}"
     except FileNotFoundError:
         return f"Error: file not found: {path}"
     except UnicodeDecodeError:
@@ -26,11 +30,14 @@ def read_file(path: str) -> str:
 
 def write_file(path: str, content: str) -> str:
     try:
-        directory = os.path.dirname(path)
+        full = resolve(path)
+        directory = os.path.dirname(full)
         if directory:
             os.makedirs(directory, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
+        with open(full, "w", encoding="utf-8") as f:
             f.write(content)
+    except ValueError as exc:
+        return f"Error: {exc}"
     except Exception as exc:
         return f"Error writing {path}: {exc}"
     return f"Wrote {len(content)} characters to {path}"
@@ -38,8 +45,11 @@ def write_file(path: str, content: str) -> str:
 
 def edit_file(path: str, old: str, new: str) -> str:
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        full = resolve(path)
+        with open(full, "r", encoding="utf-8") as f:
             content = f.read()
+    except ValueError as exc:
+        return f"Error: {exc}"
     except FileNotFoundError:
         return f"Error: file not found: {path}"
     occurrences = content.count(old)
@@ -51,7 +61,7 @@ def edit_file(path: str, old: str, new: str) -> str:
             "make it unique so exactly one match is edited"
         )
     try:
-        with open(path, "w", encoding="utf-8") as f:
+        with open(full, "w", encoding="utf-8") as f:
             f.write(content.replace(old, new))
     except Exception as exc:
         return f"Error writing {path}: {exc}"
@@ -60,7 +70,10 @@ def edit_file(path: str, old: str, new: str) -> str:
 
 def list_dir(path: str = ".") -> str:
     try:
-        entries = sorted(os.listdir(path))
+        full = resolve(path)
+        entries = sorted(os.listdir(full))
+    except ValueError as exc:
+        return f"Error: {exc}"
     except FileNotFoundError:
         return f"Error: directory not found: {path}"
     except Exception as exc:
@@ -69,8 +82,8 @@ def list_dir(path: str = ".") -> str:
         return "(empty directory)"
     lines = []
     for name in entries:
-        full = os.path.join(path, name)
-        lines.append(f"{name}/" if os.path.isdir(full) else name)
+        full_entry = os.path.join(full, name)
+        lines.append(f"{name}/" if os.path.isdir(full_entry) else name)
     return "\n".join(lines)
 
 

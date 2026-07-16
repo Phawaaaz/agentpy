@@ -44,7 +44,7 @@ multiagent/     optional outer layer: delegate-to-sub-agent tool, composes engin
 auth/           user accounts: salted/hashed passwords, per-user session isolation (D22)
 observability/  token usage + cost estimate + JSONL event logging (D16)
 config.py       settings resolved once from env/.env, injected at the edge
-tests/          smoke/phase2/mcp/pipeline/memory/cli_skills/external_skills/multiagent/offload/model_switch/auth/planning/search_test.py — all fakes, no key
+tests/          smoke/phase2/mcp/pipeline/memory/cli_skills/external_skills/multiagent/offload/model_switch/auth/planning/search/retry/model_info/config_yaml/workspace/concurrency/storage/token/usage_store/hooks/search_files/sandbox_test.py — all fakes (sandbox has a daemon-gated tier)
 ```
 
 ## Hard rules (enforced, not suggestions)
@@ -75,6 +75,7 @@ pip install -r requirements.txt
 python tests/smoke_test.py        # prints: SMOKE TEST PASSED
 python tests/phase2_test.py       # prints: PHASE 2 TESTS PASSED
 python tests/mcp_test.py          # prints: MCP TESTS PASSED
+python tests/mcp_real_test.py     # prints: MCP REAL TESTS PASSED (real stdio server)
 python tests/pipeline_test.py     # prints: PIPELINE TESTS PASSED
 python tests/memory_test.py       # prints: MEMORY TESTS PASSED
 python tests/cli_skills_test.py   # prints: CLI SKILLS TESTS PASSED
@@ -85,13 +86,27 @@ python tests/model_switch_test.py # prints: MODEL SWITCH TESTS PASSED
 python tests/auth_test.py         # prints: AUTH TESTS PASSED
 python tests/planning_test.py     # prints: PLANNING TESTS PASSED
 python tests/search_test.py       # prints: SEARCH TESTS PASSED
+python tests/retry_test.py        # prints: RETRY/FALLBACK TESTS PASSED
+python tests/model_info_test.py   # prints: MODEL INFO TESTS PASSED
+python tests/config_yaml_test.py  # unittest: OK
+python tests/workspace_test.py    # prints: WORKSPACE TESTS PASSED
+python tests/concurrency_test.py  # prints: CONCURRENCY TESTS PASSED
+python tests/storage_test.py      # prints: STORAGE TESTS PASSED
+python tests/token_test.py        # prints: TOKEN TESTS PASSED
+python tests/usage_store_test.py  # prints: USAGE STORE TESTS PASSED
+python tests/hooks_test.py        # prints: HOOKS TESTS PASSED
+python tests/search_files_test.py # prints: SEARCH FILES TESTS PASSED
+python tests/sandbox_test.py      # prints: SANDBOX TESTS PASSED
+python tests/fixes_test.py        # prints: FIXES TESTS PASSED
+python tests/server_test.py       # prints: SERVER TESTS PASSED (needs requirements-server.txt)
 
 # run for real (after: cp .env.example .env; set HARNESS_MODEL + HARNESS_API_KEY):
 python main.py                    # interactive CLI
 python pipeline.py "<task>"       # autonomous multi-stage pipeline (see pipeline/)
+uvicorn interfaces.server:app     # HTTP API server (pip install -r requirements-server.txt; D34)
 ```
 
-**Always run all thirteen test files after a change** and keep them passing.
+**Always run all twenty-seven test files after a change** and keep them passing.
 New core logic must be testable with fakes — if it can only be tested against a
 live API, it's in the wrong layer.
 
@@ -129,9 +144,10 @@ live API, it's in the wrong layer.
   (`engine/builtin/planning.py`, D23) let the model track a step-by-step
   checklist visibly instead of only holding it in its own reasoning. No
   config needed; self-registers like any other built-in tool.
-- **Enable web search:** set `HARNESS_SEARCH_API_KEY` (a free Tavily key) to
-  register the `web_search` tool (`engine/builtin/search.py`, D24). No key =
-  no tool, not a tool that always errors.
+- **Web search:** the `web_search` tool is always registered
+  (`engine/builtin/search.py`, D25): with `HARNESS_SEARCH_API_KEY` (a free
+  Tavily key) it uses the Tavily API; without one it falls back to the
+  DuckDuckGo scraper in `engine/builtin/web.py`.
 
 ## Environment / platform notes
 

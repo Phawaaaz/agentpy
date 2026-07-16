@@ -26,6 +26,7 @@ from pipeline import stages, worktree
 from pipeline.config import PipelineConfig
 from pipeline.state import ProgressLog, SliceState
 from providers.base import Provider
+from providers.model_info import effective_context_budget
 
 _COMPLETE_RE = re.compile(r"<promise>\s*complete\s*</promise>", re.IGNORECASE)
 _ABORT_RE = re.compile(r"<promise>\s*abort\s*</promise>", re.IGNORECASE)
@@ -138,7 +139,9 @@ class PipelineRunner:
         """
         conversation = Conversation(
             self.harness_config.system_prompt,
-            max_context_tokens=self.harness_config.max_context_tokens,
+            max_context_tokens=effective_context_budget(
+                self.harness_config.model, self.harness_config.max_context_tokens
+            ),
             keep_recent_messages=self.harness_config.keep_recent_messages,
             summarizer=make_provider_summarizer(self.provider),
         )
