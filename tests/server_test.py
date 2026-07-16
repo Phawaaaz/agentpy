@@ -138,6 +138,42 @@ def _run():
                        json={"message": "x"}).status_code == 404
     print("  SSE streaming: tool_call/tool_result/answer/done events, auth-enforced OK")
 
+    # HITL approval mechanism + endpoints (concurrency-free): drive the
+    # approval registry directly, then resolve through the HTTP endpoints.
+    state = app.state.harness
+    import threading
+
+    # timeout -> deny (fail safe)
+    aid_to = state.create_approval(alice["user_id"], sid, "write_file", {"path": "x"}, "write")
+    assert state.wait_approval(aid_to, timeout=0.05) is False
+
+    # a decision from a background resolver unblocks wait_approval -> allow
+    aid = state.create_approval(alice["user_id"], sid, "write_file", {"path": "y"}, "write")
+    assert client.get(f"/sessions/{sid}/approvals", headers=a_auth).json()[0]["approval_id"] == aid
+    # bob cannot resolve alice's approval
+    assert client.post(f"/sessions/{sid}/approvals/{aid}", headers=b_auth, json={"approved": True}).status_code == 404
+    result = {}
+    def waiter():
+        result["allowed"] = state.wait_approval(aid, timeout=5)
+    t = threading.Thread(target=waiter); t.start()
+    r = client.post(f"/sessions/{sid}/approvals/{aid}", headers=a_auth, json={"approved": True})
+    assert r.status_code == 200 and r.json()["approved"] is True
+    t.join(timeout=5)
+    assert result["allowed"] is True, "resolved approval must unblock the waiter as allowed"
+    # unknown approval id -> 404
+    assert client.post(f"/sessions/{sid}/approvals/nope", headers=a_auth, json={"approved": True}).status_code == 404
+
+    # denying (approved=false) unblocks the waiter as NOT allowed
+    aid_d = state.create_approval(alice["user_id"], sid, "run_command", {"command": "rm -rf /"}, "dangerous")
+    denied = {}
+    def deny_waiter():
+        denied["allowed"] = state.wait_approval(aid_d, timeout=5)
+    td = threading.Thread(target=deny_waiter); td.start()
+    assert client.post(f"/sessions/{sid}/approvals/{aid_d}", headers=a_auth, json={"approved": False}).status_code == 200
+    td.join(timeout=5)
+    assert denied["allowed"] is False, "a denied approval must resolve as not-allowed"
+    print("  HITL approval: timeout denies, resolve allow/deny works, owner-scoped, unknown id 404 OK")
+
 
 def test_server():
     if not _fastapi_available():

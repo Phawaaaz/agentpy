@@ -271,11 +271,16 @@ events arrive live so a UI isn't blocked); admin-only
 Notes:
 - The first registered account becomes **admin**. Auth is now enforced
   per-request (unlike the CLI's login scaffolding).
-- An HTTP turn has no human attached, so an `ask` permission decision is
-  **denied** (fail-safe) -- run the server in `allowlist` mode.
-  Human-in-the-loop approval over HTTP is the next milestone. (Streaming is
-  event-level — tool calls and the final answer stream live; token-by-token
-  model output would need provider-level streaming, a later addition.)
+- **Human-in-the-loop approval** works over the streaming endpoint: in
+  `ask` mode, a write/dangerous tool emits an `approval_required` SSE event
+  and the turn blocks until the client resolves it with
+  `POST /sessions/{id}/approvals/{approval_id}` (`{"approved": true|false}`);
+  `GET /sessions/{id}/approvals` lists what's pending. No decision within
+  the timeout → denied (fail-safe). In `allowlist` mode nothing needs
+  approving. Non-streaming turns still deny `ask` (no channel to ask).
+- Streaming is event-level (thinking / tool calls / final answer stream
+  live); token-by-token model output would need provider-level streaming, a
+  later addition.
 - Each request runs in an isolated execution context (D28): memory/offload/
   workspace roots are per-user, so concurrent requests never cross.
 

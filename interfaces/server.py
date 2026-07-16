@@ -84,6 +84,10 @@ class MessageResponse(BaseModel):
     usage: str
 
 
+class ApprovalDecision(BaseModel):
+    approved: bool
+
+
 class Identity(BaseModel):
     """Serialized identity (response model for /auth/me)."""
     user_id: int
@@ -107,6 +111,50 @@ class _State:
         self.engine = make_engine(config.db_url)
         self.users = DbUserStore(self.engine)
         self.jwt_secret = load_or_create_secret(config.jwt_secret_path)
+        # Pending human-in-the-loop approvals (D34 HITL): approval_id -> record.
+        # The worker thread running a turn blocks on the record's Event until a
+        # separate HTTP request resolves it (or it times out -> deny).
+        self._approvals: dict[str, dict] = {}
+        self._approvals_lock = threading.Lock()
+
+    def create_approval(self, user_id, session_id, tool, arguments, risk) -> str:
+        import uuid
+        aid = uuid.uuid4().hex
+        with self._approvals_lock:
+            self._approvals[aid] = {
+                "event": threading.Event(), "decision": False,
+                "user_id": user_id, "session_id": session_id,
+                "tool": tool, "arguments": arguments, "risk": risk,
+            }
+        return aid
+
+    def wait_approval(self, aid: str, timeout: float) -> bool:
+        with self._approvals_lock:
+            rec = self._approvals.get(aid)
+        if rec is None:
+            return False
+        got = rec["event"].wait(timeout)  # blocks the worker thread
+        with self._approvals_lock:
+            rec = self._approvals.pop(aid, None)
+        return bool(got and rec and rec["decision"])  # timeout -> deny (fail safe)
+
+    def resolve_approval(self, aid: str, user_id: int, approved: bool) -> bool:
+        with self._approvals_lock:
+            rec = self._approvals.get(aid)
+            if rec is None or rec["user_id"] != user_id:  # scoped to the owner
+                return False
+            rec["decision"] = approved
+            rec["event"].set()
+            return True
+
+    def pending_approvals(self, user_id: int, session_id: str) -> list[dict]:
+        with self._approvals_lock:
+            return [
+                {"approval_id": aid, "tool": r["tool"],
+                 "arguments": r["arguments"], "risk": r["risk"]}
+                for aid, r in self._approvals.items()
+                if r["user_id"] == user_id and r["session_id"] == session_id
+            ]
 
 
 def create_app(config: Config | None = None) -> FastAPI:
@@ -136,7 +184,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     def _user_config(username: str) -> Config:
         return state.config.for_user(username)
 
-    def _turn(username, user_id, session_id, message, on_event=None):
+    def _turn(username, user_id, session_id, message, on_event=None, approver=None):
         """Run one agent turn for a specific user+session in an ISOLATED
         execution context (D28): the memory/offload/workspace roots are set
         as ContextVars inside a copied context, so concurrent requests for
@@ -171,10 +219,11 @@ def create_app(config: Config | None = None) -> FastAPI:
             )
             agent = Orchestrator(
                 provider, registry, user_config,
-                # No human is attached to an HTTP turn, so an "ask" decision
-                # is denied (fail safe) -- human-in-the-loop approval over
-                # HTTP is a later milestone. Run the server in allowlist/auto.
-                approver=lambda call, tool: False,
+                # Non-streaming turns have no channel to ask a human, so an
+                # "ask" decision is denied (fail safe). Streaming turns pass a
+                # real approver that surfaces an `approval_required` event and
+                # waits for the client to resolve it (HITL, below).
+                approver=approver or (lambda call, tool: False),
                 on_event=on_event or (lambda *a: None),
                 conversation=conversation,
                 usage_tracker=usage,
@@ -276,9 +325,20 @@ def create_app(config: Config | None = None) -> FastAPI:
         def on_event(kind, *details):
             loop.call_soon_threadsafe(q.put_nowait, (kind, details))
 
+        def approver(tool_call, tool):
+            # Surface the pending action to the client and block this worker
+            # thread until it's resolved via POST .../approvals/{id} (or times
+            # out -> deny). Only reached when the server runs in `ask` mode.
+            aid = state.create_approval(identity.user_id, session_id, tool_call.name, tool_call.arguments, tool.risk)
+            on_event("approval_required", aid, tool_call.name, tool_call.arguments, tool.risk)
+            return state.wait_approval(aid, _APPROVAL_TIMEOUT_S)
+
         def work():
             try:
-                answer, usage = _turn(username, identity.user_id, session_id, body.message, on_event=on_event)
+                answer, usage = _turn(
+                    username, identity.user_id, session_id, body.message,
+                    on_event=on_event, approver=approver,
+                )
                 loop.call_soon_threadsafe(q.put_nowait, ("answer", (answer, usage)))
             except Exception as exc:  # surfaced to the client as an error event
                 loop.call_soon_threadsafe(q.put_nowait, ("error", (str(exc),)))
@@ -297,6 +357,22 @@ def create_app(config: Config | None = None) -> FastAPI:
                 yield f"event: {kind}\ndata: {json.dumps(_event_payload(kind, details))}\n\n"
 
         return StreamingResponse(sse(), media_type="text/event-stream")
+
+    @app.get("/sessions/{session_id}/approvals")
+    def list_approvals(session_id: str, identity: IdentityDep) -> list[dict]:
+        """Pending human-in-the-loop approvals for this session (a client can
+        poll this instead of, or alongside, reading the SSE stream)."""
+        return state.pending_approvals(identity.user_id, session_id)
+
+    @app.post("/sessions/{session_id}/approvals/{approval_id}")
+    def resolve_approval(
+        session_id: str, approval_id: str, body: ApprovalDecision, identity: IdentityDep
+    ) -> dict:
+        """Approve or deny a pending action, unblocking the waiting turn.
+        Scoped to the owner: another user's token gets 404."""
+        if not state.resolve_approval(approval_id, identity.user_id, body.approved):
+            raise HTTPException(status_code=404, detail="no such pending approval")
+        return {"approval_id": approval_id, "approved": body.approved}
 
     # --- admin ------------------------------------------------------------
 
@@ -322,6 +398,7 @@ def create_app(config: Config | None = None) -> FastAPI:
 
 
 _SSE_RESULT_CAP = 2_000  # don't flood the stream with a huge tool result
+_APPROVAL_TIMEOUT_S = 300  # how long a turn waits for a human decision before denying
 
 
 def _event_payload(kind: str, details: tuple) -> dict:
@@ -339,6 +416,9 @@ def _event_payload(kind: str, details: tuple) -> dict:
         if len(details) > 2:
             payload["duration_ms"] = details[2]
         return payload
+    if kind == "approval_required":
+        return {"approval_id": details[0], "tool": details[1],
+                "arguments": details[2], "risk": details[3]}
     if kind == "denied":
         return {"tool": details[0]}
     if kind == "compacted":
