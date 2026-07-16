@@ -814,6 +814,32 @@ designed); Windows needs WSL2-backed Docker. Verified by
 `tests/sandbox_test.py` (fake-runner unit tier + a real-container
 integration tier) and a live end-to-end CLI run.
 
+### D34 — The HTTP API server: multi-user made real and enforced
+**Decision:** `interfaces/server.py` (FastAPI) is a second interface next to
+the CLI, turning the server-ready pieces from the milestones into an
+actually-enforced runtime. A `HTTPBearer` dependency verifies the JWT
+(`auth/tokens.py`) on **every** `/sessions` and `/admin` request and yields
+the `(user_id, role)`; that `user_id` is the only key used to build
+`DbSessionStore(engine, user_id)` and `Config.for_user`, so one user's token
+cannot reach another user's rows or files. Each turn runs in
+`contextvars.copy_context()` with per-user memory/offload/workspace roots
+(D28), so concurrent requests never cross. Endpoints: register/login/me,
+list/create/delete sessions, post-message (one `Orchestrator.run`), admin
+usage, health.
+**Why a thin interface, not a rewrite:** this is exactly D7's promise -- the
+core takes an `approver` + runs a loop, ignorant of who calls it. The server
+supplies its own approver and reuses `Orchestrator`, `DbUserStore`,
+`DbSessionStore`, `auth/tokens.py`, and `Config.for_user` **unchanged**. The
+9 milestones existed to make this possible; the server is ~300 lines on top.
+**Trade-off / current scope:** an HTTP turn has no human, so an `ask`
+permission decision is denied (fail-safe) -- run in `allowlist`; streaming
+responses and human-in-the-loop approval over HTTP are the next milestones
+(see VERIFICATION.md Phase 5). Deployment is `Dockerfile` +
+`docker-compose.yml` (API + Postgres); the command sandbox needs a Docker
+socket/DinD and is off in the default compose. Verified by
+`tests/server_test.py` (TestClient: auth enforcement, cross-user isolation,
+a real turn, admin gating) and a live uvicorn run driven with curl.
+
 ---
 
 ## Known limitations & future work
