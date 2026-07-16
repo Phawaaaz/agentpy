@@ -13,7 +13,7 @@ from config import Config
 from context_engine.compaction import Conversation
 from engine.orchestrator import Orchestrator
 from engine.registry import registry
-from observability.usage import UsageTracker, cost_for
+from observability.usage import UsageTracker
 from providers.base import Provider, Response, Usage
 from storage.db import make_engine
 from storage.session_store import DbSessionStore

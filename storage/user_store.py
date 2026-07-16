@@ -96,7 +96,7 @@ class DbUserStore:
                 admins = db.scalar(
                     select(func.count()).select_from(User).where(User.role == ROLE_ADMIN)
                 )
-                if admins <= 1:
+                if (admins or 0) <= 1:
                     raise ValueError("cannot demote the last admin")
             user.role = role
             db.commit()

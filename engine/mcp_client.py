@@ -14,6 +14,7 @@ waited on synchronously, so tool handlers stay plain functions returning str.
 """
 
 import asyncio
+import concurrent.futures as cf
 import contextlib
 import threading
 from dataclasses import dataclass, field
@@ -71,39 +72,69 @@ def _result_to_text(result) -> str:
 
 
 class _ServerConnection:
-    """Holds the async context managers for one server's transport + session
-    open across many tool calls, closed as a unit on disconnect."""
+    """Owns one server's transport + session for its whole lifetime inside a
+    SINGLE asyncio task.
+
+    The transport/session context managers use anyio cancel scopes, which
+    must be entered and exited in the same task. Entering them in one
+    `run_coroutine_threadsafe` call and exiting them in another (a different
+    task on the same loop) raises "Attempted to exit cancel scope in a
+    different task than it was entered in". So the entire lifecycle -- enter,
+    stay open across many tool calls, then tear down -- runs in one
+    long-lived coroutine (`run`) on the background loop; `connect` waits for
+    it to publish the session, `disconnect` signals it to tear down."""
 
     def __init__(self, config: MCPServerConfig) -> None:
         self.config = config
-        self._stack = contextlib.AsyncExitStack()
+        self._close: asyncio.Event | None = None
+        self.task_future: "cf.Future | None" = None  # the run() coroutine's future
 
-    async def start(self) -> ClientSession:
+    async def _enter(self, stack: contextlib.AsyncExitStack) -> ClientSession:
         config = self.config
         if config.transport == "stdio":
             if not config.command:
                 raise ValueError(f"MCP server '{config.name}': stdio transport needs 'command'")
             params = StdioServerParameters(command=config.command, args=config.args, env=config.env)
-            read, write = await self._stack.enter_async_context(stdio_client(params))
+            read, write = await stack.enter_async_context(stdio_client(params))
         elif config.transport == "sse":
             if not config.url:
                 raise ValueError(f"MCP server '{config.name}': sse transport needs 'url'")
-            read, write = await self._stack.enter_async_context(sse_client(config.url))
+            read, write = await stack.enter_async_context(sse_client(config.url))
         elif config.transport == "http":
             if not config.url:
                 raise ValueError(f"MCP server '{config.name}': http transport needs 'url'")
-            read, write, _get_session_id = await self._stack.enter_async_context(
+            read, write, _get_session_id = await stack.enter_async_context(
                 streamable_http_client(config.url)
             )
         else:
             raise ValueError(f"MCP server '{config.name}': unknown transport '{config.transport}'")
 
-        session = await self._stack.enter_async_context(ClientSession(read, write))
+        session = await stack.enter_async_context(ClientSession(read, write))
         await session.initialize()
         return session
 
-    async def stop(self) -> None:
-        await self._stack.aclose()
+    async def run(self, ready: "cf.Future") -> None:
+        """Enter the transport+session, hand the session back through
+        `ready`, stay alive until `signal_close()`, then tear down -- all in
+        this one task."""
+        self._close = asyncio.Event()
+        try:
+            async with contextlib.AsyncExitStack() as stack:
+                session = await self._enter(stack)
+                if not ready.done():
+                    ready.set_result(session)
+                await self._close.wait()
+        except Exception as exc:  # noqa: BLE001 -- surfaced via `ready` or swallowed
+            # A failure before the session is published is the connect error
+            # the caller must see; a failure during teardown (after ready) is
+            # best-effort and swallowed so disconnect never raises.
+            if not ready.done():
+                ready.set_exception(exc)
+
+    def signal_close(self) -> None:
+        """Ask the run() task to tear down. Scheduled onto the loop thread."""
+        if self._close is not None:
+            self._close.set()
 
 
 class MCPManager:
@@ -130,7 +161,14 @@ class MCPManager:
             self.disconnect(config.name)
 
         connection = _ServerConnection(config)
-        session = self._run(connection.start(), _CONNECT_TIMEOUT)
+        # Start the lifecycle coroutine on the bg loop; it publishes the
+        # session through `ready` once connected, then stays in that same
+        # task until disconnect signals it to tear down.
+        ready: cf.Future = cf.Future()
+        connection.task_future = asyncio.run_coroutine_threadsafe(
+            connection.run(ready), self._loop
+        )
+        session = ready.result(_CONNECT_TIMEOUT)  # raises if _enter failed
         self._connections[config.name] = connection
         return self.connect_session(config.name, session, default_risk=config.risk)
 
@@ -178,7 +216,16 @@ class MCPManager:
             self.registry.unregister(tool_name)
         connection = self._connections.pop(name, None)
         if connection is not None:
-            self._run(connection.stop(), _DISCONNECT_TIMEOUT)
+            # Signal the run() task to tear down IN ITS OWN TASK (avoids the
+            # anyio "exit cancel scope in a different task" crash), then wait
+            # for it to finish. Teardown errors are swallowed -- tools are
+            # already deregistered, so disconnect must not raise.
+            self._loop.call_soon_threadsafe(connection.signal_close)
+            if connection.task_future is not None:
+                try:
+                    connection.task_future.result(_DISCONNECT_TIMEOUT)
+                except Exception:
+                    pass
         return had_session or bool(tool_names)
 
     def disconnect_all(self) -> None:
