@@ -783,6 +783,37 @@ corrupt history, and hook errors are not swallowed (unlike tool errors)
 because a broken guardrail failing open would be worse than a crash.
 Accepted and documented rather than defended against.
 
+### D33 — Sandbox implemented: Docker-container-per-session command execution
+**Decision:** `engine/sandbox.py` runs `run_command` inside a per-session
+Docker container when `HARNESS_SANDBOX=docker` (default `off` = host
+execution, unchanged). The container mounts **only** that session's D27
+workspace (at `/workspace`, the workdir), with `--memory`/`--cpus`/
+`--pids-limit`, `--cap-drop=ALL`, `--security-opt=no-new-privileges`,
+`--read-only` rootfs (+ a writable `/tmp` tmpfs and the writable workspace),
+and `--network=none` by default. `SandboxManager` shells out to the `docker`
+CLI (no new dependency — same choice as MCPManager/worktree), keyed
+internally by workspace path (one container per session), created on the
+first command and reused via `docker exec` for the rest, torn down on
+session end (wired into `interfaces/cli.py`'s existing `finally`).
+`HARNESS_SANDBOX=docker` forces `confine_workspace=True` — the container has
+nothing else to mount — and verifies the daemon at startup so a broken
+Docker fails loud (PRINCIPLES rule 2), while a per-command container failure
+degrades to an error string (rule 1). This is the **second** gate under the
+permission layer (D5), not a replacement: a `dangerous` tool still
+prompts/denies per mode, and the container bounds what the command can reach
+once it runs.
+**Deviation from SANDBOX_DESIGN.md (recorded per PRINCIPLES rule 0):**
+persistent container per session (`docker run -d ... sleep infinity` +
+`docker exec`) rather than fresh-per-command, so installed packages and
+state survive within a session like a real shell; the egress-proxy
+allowlist stays deferred (default-deny `--network=none` is the shipped
+baseline, `HARNESS_SANDBOX_NETWORK=bridge` the escape hatch).
+**Trade-off:** requires Docker on the host and only sandboxes
+`run_command` (MCP/`fetch_url` run in-process under the permission layer, as
+designed); Windows needs WSL2-backed Docker. Verified by
+`tests/sandbox_test.py` (fake-runner unit tier + a real-container
+integration tier) and a live end-to-end CLI run.
+
 ---
 
 ## Known limitations & future work

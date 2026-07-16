@@ -43,8 +43,10 @@ import engine.builtin.planning
 import engine.builtin.search_files  # noqa: F401
 import engine.builtin.shell  # noqa: F401
 import engine.builtin.web  # noqa: F401
+import engine.sandbox
 import engine.workspace
 from engine.builtin.search import build_search_tool
+from engine.sandbox import SandboxConfig
 
 HELP = """commands:
   /new                 start a fresh conversation
@@ -520,6 +522,26 @@ def main() -> None:
     assert claims == {"user_id": user_id, "role": role}  # setup error if not (fail loud)
 
     config = config.for_user(username)
+
+    # Sandbox (D33): "docker" runs commands in a per-session container and
+    # requires workspace confinement (that's all the container mounts). We
+    # force confinement on rather than silently running unsandboxed, and
+    # verify the daemon now so a broken Docker fails loud at startup.
+    if config.sandbox == "docker":
+        config = replace(config, confine_workspace=True)
+        try:
+            engine.sandbox.configure(
+                SandboxConfig(
+                    image=config.sandbox_image,
+                    memory=config.sandbox_memory,
+                    cpus=config.sandbox_cpus,
+                    pids=config.sandbox_pids,
+                    network=config.sandbox_network,
+                )
+            )
+        except engine.sandbox.SandboxError as exc:
+            raise SystemExit(f"sandbox startup failed: {exc}")
+
     provider = build_provider(config)
     run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
 
@@ -616,6 +638,7 @@ def main() -> None:
             store.save(session.id, session.conversation)  # auto-save after each turn
     finally:
         mcp_manager.disconnect_all()
+        engine.sandbox.shutdown()  # tear down any per-session containers
 
 
 if __name__ == "__main__":

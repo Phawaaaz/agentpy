@@ -1,9 +1,11 @@
-# Sandbox Design (G1 — design approved before any implementation)
+# Sandbox Design (G1)
 
-Status: **design only.** Nothing in this document is built yet; it exists so
-the sandbox milestone starts from an agreed shape instead of improvisation
-(AUDIT.md G1, PLAN.md Milestone 8). Implementation is a separate, future
-milestone with its own tests and rollout.
+Status: **implemented** (D33 — `engine/sandbox.py`, the `HARNESS_SANDBOX`
+seam in `engine/builtin/shell.py`, and `tests/sandbox_test.py`). This
+document is both the design and the record of what was built; the two
+match, with one recorded deviation (persistent container per session rather
+than fresh-per-command — see "Isolation unit" below and DESIGN.md D33).
+Deferred pieces are listed under "Deliberately deferred" at the end.
 
 ## What problem this solves — and what it doesn't
 
@@ -97,15 +99,22 @@ failure would; it is documented as UX, not security.
   with the limit named, so the model can react (e.g. split the work).
 - Image pull failures: retried once, then loud startup failure.
 
-## Verification plan (for the implementation milestone, not now)
+## Verification (done — `tests/sandbox_test.py`)
 
-- Unit: `SandboxManager` against a fake `docker` CLI (same fake-subprocess
-  pattern as `tests/pipeline_test.py`).
-- Integration (gated on Docker being present, skipped otherwise): a real
-  container run proving (a) a command cannot read a host file outside the
-  workspace, (b) `--network=none` blocks egress, (c) the memory limit kills
-  a hog and the error string names the limit, (d) `HARNESS_SANDBOX=off`
-  reproduces today's behavior byte-for-byte.
+- Unit (no daemon, always-green tier): a fake `docker` runner asserts every
+  isolation flag is present, that only the workspace is mounted (at
+  `/workspace`, as the workdir), deterministic per-workspace container
+  naming, container **reuse** across commands + `rm -f` teardown, loud
+  preflight failure when the daemon is down, and that a container-start
+  failure degrades to an error string rather than raising.
+- Integration (gated on a reachable daemon, skipped with a notice
+  otherwise): a real `alpine` run proving a command **cannot** read a host
+  file outside the workspace, `--network=none` blocks egress, and the
+  workspace mount is shared both host→container and container→host. Verified
+  passing on a live daemon, plus a full end-to-end CLI run with
+  `HARNESS_SANDBOX=docker` executing `run_command` inside the container
+  (uid/hostname confirmed to be the container's), with no leaked containers
+  after teardown.
 
 ## Deliberately deferred
 

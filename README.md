@@ -11,7 +11,7 @@ minimal and grow into a company-wide coding + automation assistant.
 - [DESIGN.md](DESIGN.md) — the key decisions and why (ADR-style)
 - [PRINCIPLES.md](PRINCIPLES.md) — SOLID + best practices this code must follow, with a PR checklist
 - [CONTRIBUTING.md](CONTRIBUTING.md) — step-by-step: add a tool, a provider, or an interface
-- [SANDBOX_DESIGN.md](SANDBOX_DESIGN.md) — the approved design for containerized command execution (not yet built)
+- [SANDBOX_DESIGN.md](SANDBOX_DESIGN.md) — the design + build record for containerized command execution (D33)
 
 ## Architecture
 
@@ -221,9 +221,19 @@ Set `HARNESS_CONFINE_WORKSPACE=true` to confine the filesystem tools and
 (`workspaces/{user}/{session}/`) — `../` traversal, outside absolute paths,
 and symlink escapes are all rejected. Off by default: the single-user CLI
 historically works directly in whatever directory you launch it from, and
-that stays the default. This is a path boundary, not a sandbox — commands
-inside the workspace can still run anything on PATH (host isolation is the
-planned sandbox's job).
+that stays the default. This is a path boundary; for true host isolation of shell commands, turn on
+the sandbox below.
+
+## Sandbox (opt-in, needs Docker)
+
+Set `HARNESS_SANDBOX=docker` to run every `run_command` inside a per-session
+Docker container that mounts **only** that session's workspace, with memory/
+CPU/PID limits, dropped capabilities, a read-only rootfs, and networking
+denied by default (`HARNESS_SANDBOX_NETWORK=bridge` to allow it). It implies
+workspace confinement and verifies the Docker daemon at startup (failing
+loud if it's unreachable). The permission layer stays the first gate; the
+container is a second, independent one. Off by default — commands run on the
+host. See [SANDBOX_DESIGN.md](SANDBOX_DESIGN.md) and DESIGN.md D33.
 
 ## Admin monitoring
 
@@ -271,6 +281,7 @@ python tests/token_test.py          # JWT issue/verify/expiry/tamper (D30)
 python tests/usage_store_test.py    # durable usage rows + admin gating (D30)
 python tests/hooks_test.py          # pre/post model+tool interception points (D32)
 python tests/search_files_test.py   # find_files/grep_files, git_commit, event latency
+python tests/sandbox_test.py         # Docker sandbox: isolation flags + gated real-container run (D33)
 ```
 
-All twenty-three run against fakes — no key, no network — and should print `... PASSED`.
+All twenty-four run against fakes — no key, no network — and should print `... PASSED`.

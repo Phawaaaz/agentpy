@@ -388,18 +388,22 @@ login), and role checks gate CLI commands, not storage APIs.
 
 ### G. Sandbox
 
-**G1. Execution isolation design.** 🔵 **Design complete, implementation
-deliberately deferred** (Milestone 8 — the milestone's scope was the design,
-per the product context's "planned, not yet built"). `SANDBOX_DESIGN.md`
-specifies: one Docker container per (user, session) mounting only that
-session's D27 workspace; resource limits (memory/CPU/PIDs/read-only rootfs,
-cap-drop); default-deny networking with an egress-proxy allowlist; command
-regex-filtering explicitly rejected as a primary control (container boundary
-instead, advisory UX-only denylist); a `HARNESS_SANDBOX=off|docker` seam in
-`run_command` (default off = today's behavior) behind a `SandboxManager`
-mirroring `MCPManager`'s lifecycle pattern; loud-at-startup failure modes;
-and a gated integration-test plan. The original finding, kept for the
-record: **was missing entirely — no code, no design doc.** Confirmed via `find . -iname "*docker*" -o -iname "*sandbox*"`:
+**G1. Execution isolation.** ✅ **Implemented** (D33 — scope expansion
+beyond the design-only Milestone 8, done because Docker turned out to be
+available to verify against). `engine/sandbox.py` + the
+`HARNESS_SANDBOX=off|docker` seam in `run_command`: a per-session Docker
+container mounting only that session's D27 workspace, with memory/CPU/PID
+limits, `--cap-drop=ALL`, `--security-opt=no-new-privileges`, read-only
+rootfs, and `--network=none` by default; the permission layer stays the
+first gate, the container is the second. Loud-at-startup on a broken daemon,
+graceful error string on a per-command failure. Verified by
+`tests/sandbox_test.py` — a fake-runner unit tier (asserts every isolation
+flag, workspace-only mount, container reuse + teardown) **and** a
+daemon-gated integration tier that proves on a real `alpine` container that
+host files outside the workspace are unreadable and egress is denied — plus
+a live end-to-end CLI run. `SANDBOX_DESIGN.md` is the design + build record.
+The original finding, kept for the record: **was missing entirely — no
+code, no design doc.** Confirmed via `find . -iname "*docker*" -o -iname "*sandbox*"`:
 zero hits outside `.git`. `run_command` runs directly on the host process
 with no container, no resource limits (memory/CPU/disk), no network policy,
 no command allow/deny-list beyond the three-tier `risk` permission gate
@@ -537,10 +541,10 @@ initial audit.
 | D. Filesystem & Workspace (3) | **3** | 0 | 0 | 0 |
 | E. Memory (3) | **3** | 0 | 0 | 0 |
 | F. Sessions/Multi-user/Auth (4) | **3** | 1 | 0 | 0 |
-| G. Sandbox (1) | 0 | 0 | 0 | **1** |
+| G. Sandbox (1) | **1** | 0 | 0 | 0 |
 | H. Long-Horizon (5) | **4** | 1 | 0 | 0 |
 | I. Observability/Config (3) | **3** | 0 | 0 | 0 |
-| **Total (35 items)** | **28** | **6** | **0** | **1** |
+| **Total (35 items)** | **29** | **6** | **0** | **0** |
 
 Milestone 1 (model layer hardening) flipped A4 ❌→✅, A5 🟡→✅, and C4
 🟡→✅ (the `web_search` collision bug, resolved as one tool with a
@@ -560,6 +564,9 @@ H5 ❌→✅. Milestone 8 produced `SANDBOX_DESIGN.md`, moving G1
 ❌→🔵 (designed, consciously not yet built). Milestone 9 flipped C2,
 D3, I1, and I3 to ✅ (find_files/grep_files, git_commit, duration_ms on
 usage/tool_result events, and a graceful pipeline-level failure path).
+Post-plan, the sandbox (Milestone 8) was implemented too (D33) rather than
+left as a design, flipping G1 🔵→✅ once Docker proved available to verify
+against.
 Remaining 🟡 after all nine milestones: A1 (two hand-written adapters, not
 a universal client — OpenRouter/base_url covers the practical gap), A3
 (no streaming — recorded non-goal), B1 (no environment-info prompt

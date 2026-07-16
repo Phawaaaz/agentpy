@@ -126,6 +126,16 @@ class Config:
     confine_workspace: bool = False
     # Root under which per-user, per-session workspaces are created.
     workspace_dir: str = "workspaces"
+    # Sandbox (D33): "off" = run_command runs on the host (default); "docker"
+    # = run each session's commands inside a resource-limited, network-denied
+    # container mounting only that session's workspace. "docker" implies
+    # workspace confinement (the container has nothing else to mount).
+    sandbox: str = "off"
+    sandbox_image: str = "python:3.11-slim"
+    sandbox_memory: str = "2g"
+    sandbox_cpus: str = "2"
+    sandbox_pids: int = 256
+    sandbox_network: str = "none"  # "none" = default-deny egress; "bridge" allows
 
     def for_user(self, username: str) -> "Config":
         """A copy of this Config with per-user data directories namespaced by
@@ -205,4 +215,10 @@ class Config:
             search_api_key=get_val("HARNESS_SEARCH_API_KEY", "search_api_key", cls.search_api_key) or None,
             confine_workspace=get_val("HARNESS_CONFINE_WORKSPACE", "confine_workspace", cls.confine_workspace, to_bool),
             workspace_dir=get_val("HARNESS_WORKSPACE_DIR", "workspace_dir", cls.workspace_dir),
+            sandbox=get_val("HARNESS_SANDBOX", "sandbox", cls.sandbox),
+            sandbox_image=get_val("HARNESS_SANDBOX_IMAGE", "sandbox_image", cls.sandbox_image),
+            sandbox_memory=get_val("HARNESS_SANDBOX_MEMORY", "sandbox_memory", cls.sandbox_memory),
+            sandbox_cpus=get_val("HARNESS_SANDBOX_CPUS", "sandbox_cpus", cls.sandbox_cpus),
+            sandbox_pids=get_val("HARNESS_SANDBOX_PIDS", "sandbox_pids", cls.sandbox_pids, int),
+            sandbox_network=get_val("HARNESS_SANDBOX_NETWORK", "sandbox_network", cls.sandbox_network),
         )
