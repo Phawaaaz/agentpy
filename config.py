@@ -184,7 +184,10 @@ class Config:
 
         def get_val(env_name: str, yaml_key: str, default, type_conv=None):
             env_val = os.getenv(env_name)
-            if env_val is not None:
+            # A blank env var (e.g. a `HARNESS_MAX_TOKENS=` line in a copied
+            # .env) means "unset", not "the empty string" -- otherwise
+            # type_conv=int would choke on int('') and crash startup.
+            if env_val is not None and env_val.strip() != "":
                 return type_conv(env_val) if type_conv else env_val
             yaml_val = yaml_data.get(yaml_key)
             if yaml_val is not None:

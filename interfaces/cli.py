@@ -8,6 +8,7 @@ session; anything else is a task for the agent.
 
 import getpass
 import os
+import shutil
 from dataclasses import replace
 from datetime import datetime
 
@@ -371,6 +372,24 @@ def _handle_users_command(args: list[str], session: Session, user_store: DbUserS
     print("usage: /users | /users role <name> <admin|user>")
 
 
+def _delete_session_workspace(config: Config, session_id: str) -> None:
+    """Remove a deleted session's on-disk workspace directory so /delete
+    actually purges the session's files, not just its conversation row.
+    (Memory is per-user, not per-session, so it is intentionally left; the
+    content-hashed offload dir is shared and not per-session either.) The
+    session_id is sanitized the same way the workspace path is built."""
+    safe = "".join(c for c in session_id if c.isalnum() or c in ("-", "_"))
+    if not safe:
+        return
+    path = os.path.join(config.workspace_dir, safe)
+    # Confine the delete to under workspace_dir -- never let a crafted id
+    # escape it (defence in depth; safe already strips separators).
+    root = os.path.abspath(config.workspace_dir)
+    target = os.path.abspath(path)
+    if target != root and target.startswith(root + os.sep) and os.path.isdir(target):
+        shutil.rmtree(target, ignore_errors=True)
+
+
 def _handle_command(
     text: str,
     session: Session,
@@ -415,6 +434,7 @@ def _handle_command(
         elif args[0] == session.id:
             print("that's the active session -- /new first, then /delete it")
         elif store.delete(args[0]):
+            _delete_session_workspace(session.config, args[0])
             print(f"deleted session: {args[0]}")
         else:
             print(f"no such session: {args[0]}")

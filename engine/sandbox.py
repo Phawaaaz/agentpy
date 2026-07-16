@@ -20,6 +20,7 @@ integration test exercises a real container.
 
 import hashlib
 import os
+import shlex
 import subprocess
 from dataclasses import dataclass
 from typing import Callable
@@ -29,6 +30,8 @@ Runner = Callable[[list[str], float], tuple[int, str]]
 
 _CONTAINER_PREFIX = "harness-sbx-"
 _WORKDIR = "/workspace"
+# `timeout` kill exit codes: 124 (GNU), 143 (busybox SIGTERM), 137 (SIGKILL).
+_TIMEOUT_CODES = {124, 143, 137}
 
 
 def _subprocess_runner(args: list[str], timeout: float) -> tuple[int, str]:
@@ -117,8 +120,19 @@ class SandboxManager:
             name = self._ensure(workspace)
         except SandboxError as exc:
             return f"Error: {exc}"
-        code, out = self._run(["exec", name, "sh", "-c", command], timeout)
+        # Enforce the timeout *inside* the container with `timeout(1)`, so a
+        # runaway command is actually killed rather than merely abandoned by
+        # a client-side `docker exec` timeout (which leaves the process
+        # running against the container's limits). A small grace margin lets
+        # the client-side deadline act only as a backstop.
+        wrapped = f"timeout -k 2 {int(timeout)} sh -c {shlex.quote(command)}"
+        code, out = self._run(["exec", name, "sh", "-c", wrapped], timeout + 5)
         body = out.strip() or "(no output)"
+        # `timeout`'s exit code for a kill differs by implementation: GNU
+        # coreutils returns 124, busybox (alpine) returns 143 (SIGTERM) or
+        # 137 (SIGKILL from -k). Treat all three as a timeout kill.
+        if code in _TIMEOUT_CODES:
+            body = f"Error: command timed out after {timeout}s (killed)\n{body}".rstrip()
         return f"exit code: {code}\n{body}"
 
     def close(self, workspace: str) -> None:

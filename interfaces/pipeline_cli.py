@@ -58,6 +58,19 @@ def main() -> None:
     task = " ".join(sys.argv[1:])
 
     config = Config.load()
+    # The autonomous pipeline isolates via git worktrees (it chdir's into a
+    # per-slice worktree), not the per-session workspace/container model the
+    # sandbox is built around. Rather than silently run commands on the host
+    # when the user set HARNESS_SANDBOX=docker (making them believe otherwise
+    # on the *unattended* path), fail loud -- fixed the silent-ignore bug the
+    # verification review found.
+    if config.sandbox == "docker":
+        raise SystemExit(
+            "HARNESS_SANDBOX=docker is not supported by the autonomous pipeline "
+            "(it isolates via git worktrees, not per-session containers). Unset "
+            "HARNESS_SANDBOX for `python pipeline.py`, or use the interactive CLI "
+            "(main.py) for sandboxed command execution."
+        )
     if config.permission_mode == "ask":
         print(
             "warning: HARNESS_PERMISSION_MODE is 'ask', but no human is present to answer "

@@ -87,6 +87,28 @@ pipeline:
                     del os.environ["HARNESS_PIPELINE_MAX_ITERATIONS"]
                 os.chdir(old_cwd)
 
+    def test_blank_env_vars_are_treated_as_unset(self):
+        """A copied .env.example ships blank HARNESS_MAX_TOKENS= etc.; a
+        blank int-typed env var must fall back to the default, not crash
+        Config.load() with int('') (regression for the clean-room bug)."""
+        blanks = {
+            "HARNESS_MAX_TOKENS": "",
+            "HARNESS_MAX_CONTEXT_TOKENS": "",
+            "HARNESS_MODEL": "",           # blank string field -> default, not ""
+            "HARNESS_PERMISSION_MODE": "",
+        }
+        for k, v in blanks.items():
+            os.environ[k] = v
+        try:
+            config = Config.load()  # must not raise
+            self.assertIsNone(config.max_tokens)
+            self.assertIsNone(config.max_context_tokens)
+            self.assertEqual(config.model, Config.model)  # not the empty string
+            self.assertEqual(config.permission_mode, Config.permission_mode)
+        finally:
+            for k in blanks:
+                del os.environ[k]
+
     @patch("pipeline.worktree.create_worktree")
     @patch("pipeline.worktree.repo_root")
     @patch("pipeline.worktree.diff_stat")

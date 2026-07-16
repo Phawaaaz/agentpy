@@ -104,15 +104,34 @@ def usage_for_user(engine: Engine, username: str) -> list[dict]:
     )
     with OrmSession(engine) as db:
         rows = [dict(row._mapping) for row in db.execute(stmt)]
-        # Attach each session's most recent non-empty task.
+        if not rows:
+            return rows
+        # Most-recent non-empty task per session, in ONE query (was N+1 --
+        # a separate SELECT per session row): rank rows within each session
+        # by recency and keep rank 1. Uses a window function, portable
+        # across SQLite (>=3.25) and Postgres.
+        ranked = (
+            select(
+                UsageLog.session_id,
+                UsageLog.task,
+                func.row_number()
+                .over(
+                    partition_by=UsageLog.session_id,
+                    order_by=desc(UsageLog.created_at),
+                )
+                .label("rn"),
+            )
+            .join(User, UsageLog.user_id == User.id)
+            .where(User.username == username)
+            .where(UsageLog.task != "")
+            .subquery()
+        )
+        latest = {
+            sid: task
+            for sid, task in db.execute(
+                select(ranked.c.session_id, ranked.c.task).where(ranked.c.rn == 1)
+            )
+        }
         for row in rows:
-            row["last_task"] = db.scalar(
-                select(UsageLog.task)
-                .join(User, UsageLog.user_id == User.id)
-                .where(User.username == username)
-                .where(UsageLog.session_id == row["session_id"])
-                .where(UsageLog.task != "")
-                .order_by(desc(UsageLog.created_at))
-                .limit(1)
-            ) or "(no task recorded)"
+            row["last_task"] = latest.get(row["session_id"], "(no task recorded)")
         return rows

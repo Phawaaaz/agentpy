@@ -70,7 +70,9 @@ def test_reuses_container_then_tears_down():
         runs = [c for c in fake.calls if c[0] == "run"]
         execs = [c for c in fake.calls if c[0] == "exec"]
         assert len(runs) == 1, "second command must reuse the container, not start a new one"
-        assert len(execs) == 2 and execs[1][-1] == "two"
+        # The command is wrapped in an in-container `timeout` (so a runaway
+        # command is actually killed), so it's embedded in the last arg.
+        assert len(execs) == 2 and "two" in execs[1][-1] and "timeout" in execs[1][-1]
         mgr.close_all()
         assert any(c[0] == "rm" and c[1] == "-f" for c in fake.calls), "close must rm -f the container"
     print("  container reused across commands, torn down on close OK")
@@ -139,6 +141,17 @@ def test_real_container_isolation():
             assert os.path.exists(os.path.join(ws, "out.txt"))
             with open(os.path.join(ws, "out.txt")) as f:
                 assert f.read().strip() == "from-container"
+
+            # A runaway command is killed by the in-container timeout, and
+            # the process is actually gone afterward (not left running).
+            killed = mgr.exec(ws, "sleep 30", timeout=2)
+            assert "timed out" in killed, killed
+            # After the -k grace window, the runaway `sleep 30` must be gone.
+            # Match its exact argv "sleep 30" (whole line) so we don't count
+            # the container's own `sleep infinity` keepalive (PID 1) or the
+            # `timeout ... sh -c 'sleep 30'` wrapper.
+            still = mgr.exec(ws, "sleep 3; ps -o args= 2>/dev/null | grep -cx 'sleep 30' || echo 0")
+            assert still.rstrip().endswith("0"), f"sleep left running: {still}"
         finally:
             mgr.close_all()
     print("  real container: workspace shared both ways, host reads blocked, egress denied OK")
