@@ -11,6 +11,7 @@ minimal and grow into a company-wide coding + automation assistant.
 - [DESIGN.md](DESIGN.md) — the key decisions and why (ADR-style)
 - [PRINCIPLES.md](PRINCIPLES.md) — SOLID + best practices this code must follow, with a PR checklist
 - [CONTRIBUTING.md](CONTRIBUTING.md) — step-by-step: add a tool, a provider, or an interface
+- [SANDBOX_DESIGN.md](SANDBOX_DESIGN.md) — the approved design for containerized command execution (not yet built)
 
 ## Architecture
 

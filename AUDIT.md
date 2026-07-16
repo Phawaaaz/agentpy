@@ -389,8 +389,18 @@ login), and role checks gate CLI commands, not storage APIs.
 
 ### G. Sandbox
 
-**G1. Execution isolation design.** ❌ **Missing entirely — no code, no
-design doc.** Confirmed via `find . -iname "*docker*" -o -iname "*sandbox*"`:
+**G1. Execution isolation design.** 🔵 **Design complete, implementation
+deliberately deferred** (Milestone 8 — the milestone's scope was the design,
+per the product context's "planned, not yet built"). `SANDBOX_DESIGN.md`
+specifies: one Docker container per (user, session) mounting only that
+session's D27 workspace; resource limits (memory/CPU/PIDs/read-only rootfs,
+cap-drop); default-deny networking with an egress-proxy allowlist; command
+regex-filtering explicitly rejected as a primary control (container boundary
+instead, advisory UX-only denylist); a `HARNESS_SANDBOX=off|docker` seam in
+`run_command` (default off = today's behavior) behind a `SandboxManager`
+mirroring `MCPManager`'s lifecycle pattern; loud-at-startup failure modes;
+and a gated integration-test plan. The original finding, kept for the
+record: **was missing entirely — no code, no design doc.** Confirmed via `find . -iname "*docker*" -o -iname "*sandbox*"`:
 zero hits outside `.git`. `run_command` runs directly on the host process
 with no container, no resource limits (memory/CPU/disk), no network policy,
 no command allow/deny-list beyond the three-tier `risk` permission gate
@@ -524,10 +534,10 @@ initial audit.
 | D. Filesystem & Workspace (3) | **2** | 1 | 0 | 0 |
 | E. Memory (3) | **3** | 0 | 0 | 0 |
 | F. Sessions/Multi-user/Auth (4) | **3** | 1 | 0 | 0 |
-| G. Sandbox (1) | 0 | 0 | 1 | 0 |
+| G. Sandbox (1) | 0 | 0 | 0 | **1** |
 | H. Long-Horizon (5) | **4** | 1 | 0 | 0 |
 | I. Observability/Config (3) | 1 | 2 | 0 | 0 |
-| **Total (35 items)** | **24** | **9** | **2** | **0** |
+| **Total (35 items)** | **24** | **9** | **1** | **1** |
 
 Milestone 1 (model layer hardening) flipped A4 ❌→✅, A5 🟡→✅, and C4
 🟡→✅ (the `web_search` collision bug, resolved as one tool with a
@@ -543,7 +553,8 @@ scaffolding + admin monitoring, D30) flipped F4 🟡→✅: JWT
 issue/verify at login, admin/user roles, durable per-call usage logging
 with admin-only `/usage`/`/users` views. Milestone 6 (memory
 injection, D31) flipped E3 🟡→✅. Milestone 7 (hooks, D32) flipped
-H5 ❌→✅.
+H5 ❌→✅. Milestone 8 produced `SANDBOX_DESIGN.md`, moving G1
+❌→🔵 (designed, consciously not yet built).
 
 Nothing was scored 🔵 deliberately-deferred at the item level — every gap
 found is either a real fix-now bug (the `web_search` collision), a design
