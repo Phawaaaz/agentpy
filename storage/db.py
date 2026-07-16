@@ -24,6 +24,10 @@ def make_engine(db_url: str) -> Engine:
         directory = os.path.dirname(path)
         if directory and path != ":memory:":
             os.makedirs(directory, exist_ok=True)
-    engine = create_engine(db_url)
+    from sqlalchemy.pool import NullPool
+    if db_url.startswith(_SQLITE_PREFIX):
+        engine = create_engine(db_url, poolclass=NullPool)
+    else:
+        engine = create_engine(db_url)
     Base.metadata.create_all(engine)
     return engine

@@ -72,7 +72,7 @@ def test_two_sessions_do_not_corrupt_each_other():
             assert f"step for {name}" in r["plan"], r["plan"]
             assert f"step for {other}" not in r["plan"]
             assert r["offload_dir_files"], f"{name}'s offload dir is empty"
-            assert f"offload/{name}" in r["offload_result"] or name in str(r["offload_dir_files"])
+            assert f"offload/{name}" in r["offload_result"] or f"offload\\{name}" in r["offload_result"] or name in str(r["offload_dir_files"])
             assert r["workspace_file"] == f"file of {name}"
         # Each session's memory file lives only under its own root.
         assert os.path.exists(os.path.join(base, "memory", "alice", "notes.md"))

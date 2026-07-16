@@ -60,7 +60,13 @@ def test_symlink_escape_rejected():
         with open(secret, "w", encoding="utf-8") as f:
             f.write("secret")
         link = os.path.join(root, "sneaky")
-        os.symlink(outside, link)
+        try:
+            os.symlink(outside, link)
+        except OSError:
+            # On Windows, creating symlinks requires admin privilege or Developer Mode.
+            # Skip this test gracefully if we cannot create symlinks.
+            print("  symlink escape test SKIPPED (no symlink privilege on Windows)")
+            return
         try:
             workspace.confine(root, "sneaky/secret.txt")
         except ValueError:
@@ -86,7 +92,8 @@ def test_tools_confined_when_root_set():
             assert read_file("../escape.txt").startswith("Error:")
             assert list_dir("/").startswith("Error:")
             # run_command executes inside the workspace root.
-            result = run_command("pwd")
+            cmd = "cd" if sys.platform == "win32" else "pwd"
+            result = run_command(cmd)
             assert os.path.realpath(root) in result, result
         finally:
             _reset()
@@ -101,7 +108,8 @@ def test_default_behavior_unconfined():
         assert write_file(target, "free").startswith("Wrote")
         assert read_file(target) == "free"
         # run_command keeps the process's own cwd.
-        result = run_command("pwd")
+        cmd = "cd" if sys.platform == "win32" else "pwd"
+        result = run_command(cmd)
         assert os.path.realpath(os.getcwd()) in result, result
     print("  default (no root) keeps the historical unconfined behavior OK")
 

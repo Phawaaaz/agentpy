@@ -62,7 +62,8 @@ def test_secret_is_persisted_and_env_wins():
         first = load_or_create_secret(path, env_var="HARNESS_TEST_JWT_SECRET")
         second = load_or_create_secret(path, env_var="HARNESS_TEST_JWT_SECRET")
         assert first == second, "the generated secret must persist across loads"
-        assert (os.stat(path).st_mode & 0o777) == 0o600, "secret file must be 0600"
+        if sys.platform != "win32":
+            assert (os.stat(path).st_mode & 0o777) == 0o600, "secret file must be 0600"
         os.environ["HARNESS_TEST_JWT_SECRET"] = "from-the-env"
         try:
             assert load_or_create_secret(path, env_var="HARNESS_TEST_JWT_SECRET") == "from-the-env"
