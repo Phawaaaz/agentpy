@@ -17,7 +17,7 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from engine.sandbox import SandboxConfig, SandboxManager, _subprocess_runner
+from engine.sandbox import SandboxConfig, SandboxManager
 
 
 class _FakeDocker:
