@@ -270,6 +270,7 @@ python tests/storage_test.py        # DB users/sessions, isolation, JSON->DB mig
 python tests/token_test.py          # JWT issue/verify/expiry/tamper (D30)
 python tests/usage_store_test.py    # durable usage rows + admin gating (D30)
 python tests/hooks_test.py          # pre/post model+tool interception points (D32)
+python tests/search_files_test.py   # find_files/grep_files, git_commit, event latency
 ```
 
-All twenty-two run against fakes — no key, no network — and should print `... PASSED`.
+All twenty-three run against fakes — no key, no network — and should print `... PASSED`.

@@ -52,6 +52,21 @@ def git_diff(path: str = ".", staged: bool = False, context_lines: int = 3) -> s
     return _truncate(_run_git(args, cwd=path))
 
 
+def git_commit(message: str, path: str = ".") -> str:
+    """Stage everything and commit -- the interactive session's checkpoint
+    (the pipeline has its own committing in pipeline/worktree.py; this
+    brings the same rollback point to main.py sessions, closing AUDIT D3)."""
+    if not message.strip():
+        return "Error: commit message must not be empty"
+    staged = _run_git(["add", "-A"], cwd=path)
+    if staged.startswith("Error"):
+        return staged
+    result = _run_git(["commit", "-m", message], cwd=path)
+    if result.startswith("Error") and "nothing to commit" in result:
+        return "(nothing to commit -- working tree clean)"
+    return _truncate(result)
+
+
 def git_log(path: str = ".", max_count: int = 10, oneline: bool = True) -> str:
     if max_count < 1:
         return "Error: max_count must be at least 1"
@@ -110,6 +125,29 @@ registry.register(
         },
         handler=git_diff,
         risk="safe",
+    )
+)
+
+registry.register(
+    Tool(
+        name="git_commit",
+        description=(
+            "Stage all changes and create a git commit with the given message. "
+            "Use to checkpoint work so it can be reviewed or rolled back."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "message": {"type": "string", "description": "Commit message."},
+                "path": {
+                    "type": "string",
+                    "description": "Repository path. Defaults to '.'.",
+                },
+            },
+            "required": ["message"],
+        },
+        handler=git_commit,
+        risk="write",
     )
 )
 

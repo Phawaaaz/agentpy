@@ -44,7 +44,7 @@ multiagent/     optional outer layer: delegate-to-sub-agent tool, composes engin
 auth/           user accounts: salted/hashed passwords, per-user session isolation (D22)
 observability/  token usage + cost estimate + JSONL event logging (D16)
 config.py       settings resolved once from env/.env, injected at the edge
-tests/          smoke/phase2/mcp/pipeline/memory/cli_skills/external_skills/multiagent/offload/model_switch/auth/planning/search/retry/model_info/config_yaml/workspace/concurrency/storage/token/usage_store/hooks_test.py — all fakes, no key
+tests/          smoke/phase2/mcp/pipeline/memory/cli_skills/external_skills/multiagent/offload/model_switch/auth/planning/search/retry/model_info/config_yaml/workspace/concurrency/storage/token/usage_store/hooks/search_files_test.py — all fakes, no key
 ```
 
 ## Hard rules (enforced, not suggestions)
@@ -94,13 +94,14 @@ python tests/storage_test.py      # prints: STORAGE TESTS PASSED
 python tests/token_test.py        # prints: TOKEN TESTS PASSED
 python tests/usage_store_test.py  # prints: USAGE STORE TESTS PASSED
 python tests/hooks_test.py        # prints: HOOKS TESTS PASSED
+python tests/search_files_test.py # prints: SEARCH FILES TESTS PASSED
 
 # run for real (after: cp .env.example .env; set HARNESS_MODEL + HARNESS_API_KEY):
 python main.py                    # interactive CLI
 python pipeline.py "<task>"       # autonomous multi-stage pipeline (see pipeline/)
 ```
 
-**Always run all twenty-two test files after a change** and keep them passing.
+**Always run all twenty-three test files after a change** and keep them passing.
 New core logic must be testable with fakes — if it can only be tested against a
 live API, it's in the wrong layer.
 

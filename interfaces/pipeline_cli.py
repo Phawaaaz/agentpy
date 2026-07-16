@@ -19,6 +19,7 @@ import engine.builtin.git_tool  # noqa: F401
 import engine.builtin.github_tool  # noqa: F401
 import engine.builtin.offload
 import engine.builtin.planning  # noqa: F401
+import engine.builtin.search_files  # noqa: F401
 import engine.builtin.shell  # noqa: F401
 import engine.builtin.web  # noqa: F401
 from engine.builtin.search import build_search_tool
@@ -71,7 +72,14 @@ def main() -> None:
     provider = build_provider(config)
     runner = PipelineRunner(provider, registry, config, PipelineConfig.load(), on_event=_on_event)
 
-    result = runner.run(task)
+    try:
+        result = runner.run(task)
+    except Exception as exc:
+        # A provider failure that survives retries/fallback (D26), or a git
+        # failure, shouldn't end as a raw traceback: report and exit
+        # non-zero so scripts can react (I3 -- graceful loop-level errors).
+        print(f"\npipeline failed: {exc}")
+        sys.exit(1)
     print("\n" + "=" * 60)
     print(f"status:      {result.status}")
     print(f"stage:       {result.stage}")

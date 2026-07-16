@@ -40,6 +40,7 @@ import engine.builtin.git_tool  # noqa: F401
 import engine.builtin.github_tool  # noqa: F401
 import engine.builtin.offload
 import engine.builtin.planning
+import engine.builtin.search_files  # noqa: F401
 import engine.builtin.shell  # noqa: F401
 import engine.builtin.web  # noqa: F401
 import engine.workspace
@@ -123,7 +124,7 @@ def _make_event_handler(*listeners):
             name, arguments = details
             print(f"\n\U0001f527 {name}({_format_args(arguments)})")
         elif kind == "tool_result":
-            _name, result = details
+            _name, result, *_timing = details  # trailing duration_ms (I1)
             preview = result if len(result) <= 300 else result[:300] + " ..."
             indented = "\n".join("     " + line for line in preview.splitlines())
             print(indented or "     (no output)")

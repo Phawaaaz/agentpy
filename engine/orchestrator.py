@@ -5,6 +5,7 @@ only component that talks to the model, and every tool run passes through its
 permission check before executing.
 """
 
+import time
 from typing import Callable
 
 from config import Config
@@ -57,7 +58,9 @@ class Orchestrator:
             for pre_model in self.hooks.pre_model_call:
                 messages = pre_model(messages)
 
+            started = time.monotonic()
             response = self.provider.complete(messages, self.registry.specs())
+            model_ms = int((time.monotonic() - started) * 1000)
             for post_model in self.hooks.post_model_call:
                 response = post_model(response)
             self.conversation.add(response.assistant_message)
@@ -68,6 +71,7 @@ class Orchestrator:
                     "usage",
                     response.usage.prompt_tokens,
                     response.usage.completion_tokens,
+                    model_ms,
                 )
 
             # No tool calls => the model is done; the interface prints the
@@ -124,8 +128,10 @@ class Orchestrator:
                 f"(mode={self.config.permission_mode}, risk={tool.risk})."
             )
 
+        started = time.monotonic()
         result = self.registry.run(tool_call.name, tool_call.arguments)
+        tool_ms = int((time.monotonic() - started) * 1000)
         for post_tool in self.hooks.post_tool_call:
             result = post_tool(tool_call, result)
-        self.on_event("tool_result", tool_call.name, result)
+        self.on_event("tool_result", tool_call.name, result, tool_ms)
         return result

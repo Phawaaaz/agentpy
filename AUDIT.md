@@ -229,15 +229,15 @@ genuinely Open/Closed — verified by reading `engine/registry.py` and every
 `engine/builtin/*.py` module (all self-register via the same 3-line pattern),
 and by `CONTRIBUTING.md`'s recipe matching the real code exactly.
 
-**C2. Filesystem tools (read/write/edit/list/search).** 🟡 **Partial.**
-Read/write/list: ✅ (`engine/builtin/filesystem.py`). Edit: ✅, targeted
-(`edit_file` requires the old text to be unique — a real patch-style edit,
-not overwrite-only, `engine/builtin/filesystem.py:39-58`). **Search/grep: ❌
-missing as a dedicated tool** — there is no `grep_files`/`find_files`/`glob`
-tool anywhere in `engine/builtin/`; `CONTRIBUTING.md`'s `find_files` example
-is documentation-only and does not exist in the codebase (confirmed by
-`Grep` across the whole tree). The only way to search files today is the
-`dangerous`-risk `run_command` escape hatch.
+**C2. Filesystem tools (read/write/edit/list/search).** ✅ **Implemented**
+(completed by Milestone 9). Read/write/list/targeted-edit were already in
+`engine/builtin/filesystem.py`; the missing piece — search — now exists as
+`engine/builtin/search_files.py`'s `find_files` (glob over names) and
+`grep_files` (regex over contents, `path:line: text` results), both
+`safe`-risk, workspace-confinement-aware (D27), skipping `.git`/venv/cache
+dirs, capped and offload-aware. Searching no longer requires the
+`dangerous`-risk `run_command` escape hatch. Verified by
+`tests/search_files_test.py`.
 
 **C3. Bash/code-execution escape hatch.** ✅ **Implemented.** `run_command`
 (`engine/builtin/shell.py`), correctly risk=`dangerous`.
@@ -295,14 +295,13 @@ previously separate `_resolve` now delegates to the same shared
 confinement off (the default), no boundary exists to protect — that is the
 documented, owner-chosen default for the local CLI, not an oversight.
 
-**D3. Git integration for rollback/continuity.** 🟡 **Partial.**
-Read-only git tools exist and are exposed to the interactive agent
-(`git_status`/`git_diff`/`git_log`, `engine/builtin/git_tool.py`). Real
-commit-based checkpointing exists and works (`pipeline/worktree.py:commit_all`,
-used every pipeline iteration) but is pipeline-only infrastructure, not a
-tool the interactive `main.py` session (or a future server session) can call
-to checkpoint its own work. Design for it exists; it isn't wired to the
-general case.
+**D3. Git integration for rollback/continuity.** ✅ **Implemented**
+(completed by Milestone 9). Read-only `git_status`/`git_diff`/`git_log`
+were already exposed; `git_commit` (`engine/builtin/git_tool.py`,
+`write`-risk) now gives the interactive session the same
+checkpoint-for-rollback the pipeline always had internally — stage-all +
+commit, friendly no-op on a clean tree. Verified by
+`tests/search_files_test.py`'s disposable-repo case.
 
 ### E. Memory (session + long-term)
 
@@ -475,21 +474,25 @@ extension author can hook without touching core code.
 ### I. Observability & Config
 
 **I1. Structured logging of model + tool calls (inputs, outputs, tokens,
-latency) per session.** 🟡 **Partial.** `EventLogger` (`observability/log.py`)
-logs every event kind with full details, per-session JSONL, including token
-usage (the `"usage"` event, `engine/orchestrator.py:59-63`). **Latency is not
-recorded anywhere** — no timing wraps `provider.complete()` or
-`registry.run()`; there's no way to answer "how long did that tool call
-take" from the logs today.
+latency) per session.** ✅ **Implemented** (completed by Milestone 9).
+`EventLogger` already logged every event with full details per session;
+the orchestrator now times `provider.complete()` and `registry.run()` and
+appends `duration_ms` to the `usage` and `tool_result` events, so the JSONL
+trace answers "how long did that call take." Verified by
+`tests/search_files_test.py`'s event-shape assertions.
 
 **I2. Central config (file + env vars).** ✅ **Implemented.** `config.py`
 + `.env` + optional `.harness.yaml`, documented exhaustively in
 `.env.example`. Verified by `tests/config_yaml_test.py`.
 
-**I3. Graceful error handling throughout the loop.** 🟡 **Partial.** Tool
-layer: ✅, airtight (C6). Provider layer: ❌, see A4/§2 — an SDK exception
-is not caught inside `Orchestrator.run()` itself, only by whichever
-interface happens to wrap the call (the CLI does; the pipeline CLI does not).
+**I3. Graceful error handling throughout the loop.** ✅ **Implemented**
+(Milestones 1 + 9). Tool layer was always airtight (C6). The provider
+layer's crash surface was closed from two directions: transient SDK errors
+are retried with backoff and optionally fall back to a second model inside
+the provider layer (A4/D26), and both interfaces now contain a final
+catch — the CLI per-turn (as before), the pipeline CLI around the whole
+run (prints `pipeline failed: ...` and exits non-zero instead of a raw
+traceback).
 
 ---
 
@@ -528,16 +531,16 @@ initial audit.
 
 | Area | ✅ | 🟡 | ❌ | 🔵 |
 |---|---|---|---|---|
-| A. Model Layer (5) | **3** | 2 | 0 | 0 |
+| A. Model Layer (5) | 3 | 2 | 0 | 0 |
 | B. Context Engine (5) | 3 | 2 | 0 | 0 |
-| C. Tools/Execution/MCP (6) | **5** | 1 | 0 | 0 |
-| D. Filesystem & Workspace (3) | **2** | 1 | 0 | 0 |
+| C. Tools/Execution/MCP (6) | **6** | 0 | 0 | 0 |
+| D. Filesystem & Workspace (3) | **3** | 0 | 0 | 0 |
 | E. Memory (3) | **3** | 0 | 0 | 0 |
 | F. Sessions/Multi-user/Auth (4) | **3** | 1 | 0 | 0 |
 | G. Sandbox (1) | 0 | 0 | 0 | **1** |
 | H. Long-Horizon (5) | **4** | 1 | 0 | 0 |
-| I. Observability/Config (3) | 1 | 2 | 0 | 0 |
-| **Total (35 items)** | **24** | **9** | **1** | **1** |
+| I. Observability/Config (3) | **3** | 0 | 0 | 0 |
+| **Total (35 items)** | **28** | **6** | **0** | **1** |
 
 Milestone 1 (model layer hardening) flipped A4 ❌→✅, A5 🟡→✅, and C4
 🟡→✅ (the `web_search` collision bug, resolved as one tool with a
@@ -554,7 +557,17 @@ issue/verify at login, admin/user roles, durable per-call usage logging
 with admin-only `/usage`/`/users` views. Milestone 6 (memory
 injection, D31) flipped E3 🟡→✅. Milestone 7 (hooks, D32) flipped
 H5 ❌→✅. Milestone 8 produced `SANDBOX_DESIGN.md`, moving G1
-❌→🔵 (designed, consciously not yet built).
+❌→🔵 (designed, consciously not yet built). Milestone 9 flipped C2,
+D3, I1, and I3 to ✅ (find_files/grep_files, git_commit, duration_ms on
+usage/tool_result events, and a graceful pipeline-level failure path).
+Remaining 🟡 after all nine milestones: A1 (two hand-written adapters, not
+a universal client — OpenRouter/base_url covers the practical gap), A3
+(no streaming — recorded non-goal), B1 (no environment-info prompt
+section), B5 (tool schemas all sent every call — no progressive tool
+disclosure), F1 (process-wide registry visibility — server-phase scoping),
+H2 (self-verification loops exist in the pipeline, not the interactive
+loop). Each is either a recorded non-goal or explicitly deferred to the
+server phase in PLAN.md §4.
 
 Nothing was scored 🔵 deliberately-deferred at the item level — every gap
 found is either a real fix-now bug (the `web_search` collision), a design
