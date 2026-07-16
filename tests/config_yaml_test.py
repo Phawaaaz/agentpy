@@ -21,7 +21,7 @@ class TestYAMLAndPipelinePR(unittest.TestCase):
     def setUp(self):
         # Clean environment variables that could interfere
         self.env_patches = {}
-        for key in os.environ:
+        for key in list(os.environ.keys()):
             if key.startswith("HARNESS_"):
                 self.env_patches[key] = patch.dict(os.environ, {}, clear=False)
                 del os.environ[key]
