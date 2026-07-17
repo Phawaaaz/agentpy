@@ -117,11 +117,42 @@ def test_openai_stream_reassembles_text_and_tool_calls():
     print("  OpenAI adapter reassembles streamed text + fragmented tool-call args OK")
 
 
+def test_openai_stream_falls_back_when_stream_options_rejected():
+    """An OpenAI-compatible endpoint that rejects stream_options must still
+    stream: drop the field and retry, rather than failing the turn."""
+    import httpx
+    import openai
+    from providers.openai_provider import OpenAIProvider
+
+    class D:
+        def __init__(self, **kw): self.__dict__.update(kw)
+
+    chunk = D(choices=[D(delta=D(content="hi", tool_calls=None))], usage=None)
+    calls = {"n": 0, "had_stream_options": []}
+    _resp = httpx.Response(400, request=httpx.Request("POST", "http://x"))
+
+    def fake_create(**kw):
+        calls["n"] += 1
+        calls["had_stream_options"].append("stream_options" in kw)
+        if calls["n"] == 1:  # first attempt (with stream_options) is rejected
+            raise openai.BadRequestError("stream_options unsupported", response=_resp, body=None)
+        return iter([chunk])  # retry (without stream_options) succeeds
+
+    provider = OpenAIProvider(model="compat/model", api_key="x")
+    provider.client.chat.completions.create = fake_create
+    deltas = [p for k, p in provider.stream([], []) if k == "delta"]
+    assert deltas == ["hi"], deltas
+    assert calls["n"] == 2, "must retry once"
+    assert calls["had_stream_options"] == [True, False], calls["had_stream_options"]
+    print("  OpenAI stream falls back gracefully when stream_options is rejected OK")
+
+
 def main():
     test_base_stream_default_wraps_complete()
     test_orchestrator_emits_token_events_when_streaming()
     test_orchestrator_no_tokens_when_not_streaming()
     test_openai_stream_reassembles_text_and_tool_calls()
+    test_openai_stream_falls_back_when_stream_options_rejected()
     print("STREAMING TESTS PASSED")
 
 

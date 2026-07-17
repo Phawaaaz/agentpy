@@ -105,9 +105,17 @@ class OpenAIProvider(Provider):
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
 
-        stream = call_with_retries(
-            lambda: self.client.chat.completions.create(**kwargs), _RETRYABLE
-        )
+        def _create():
+            try:
+                return self.client.chat.completions.create(**kwargs)
+            except openai.BadRequestError:
+                # Some OpenAI-compatible endpoints reject `stream_options`;
+                # drop it and retry so streaming still works (usage may be
+                # absent for that turn). A genuinely bad request fails again.
+                kwargs.pop("stream_options", None)
+                return self.client.chat.completions.create(**kwargs)
+
+        stream = call_with_retries(_create, _RETRYABLE)
 
         text_parts: list[str] = []
         # index -> {"id", "name", "args"} accumulated across fragments
