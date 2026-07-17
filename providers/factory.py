@@ -54,6 +54,12 @@ def _build_for_model(config: Config, model: str) -> Provider:
         prefix_key = os.getenv("OPENAI_API_KEY")
     elif prefix == "anthropic":
         prefix_key = os.getenv("ANTHROPIC_API_KEY")
+    elif prefix == "groq":
+        prefix_key = os.getenv("GROQ_API_KEY")
+    elif prefix == "together":
+        prefix_key = os.getenv("TOGETHER_API_KEY")
+    elif prefix == "openrouter":
+        prefix_key = os.getenv("OPENROUTER_API_KEY")
 
     resolved_api_key = prefix_key or config.api_key
 
@@ -67,8 +73,12 @@ def _build_for_model(config: Config, model: str) -> Provider:
         )
 
     if prefix in OPENAI_COMPATIBLE:
-        # A base_url from config wins; otherwise use the prefix's known URL.
-        base_url = config.base_url or OPENAI_COMPATIBLE[prefix]
+        # A base_url from config wins only if prefix is openai/unknown, or if it matches the model's prefix
+        # (to prevent a primary model's custom base_url from hijacking a fallback model's known URL).
+        if prefix == "openai" or not OPENAI_COMPATIBLE[prefix]:
+            base_url = config.base_url or OPENAI_COMPATIBLE[prefix]
+        else:
+            base_url = config.base_url if (config.model.startswith(prefix + "/") and config.base_url) else OPENAI_COMPATIBLE[prefix]
         # Ollama needs a non-empty key string but ignores its value.
         api_key = resolved_api_key or ("ollama" if prefix == "ollama" else None)
         return OpenAIProvider(

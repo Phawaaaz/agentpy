@@ -26,6 +26,9 @@ MODEL_INFO: dict[str, ModelInfo] = {
     "gpt-4o-mini": ModelInfo(context_window=128_000, max_output_tokens=16_384),
     "gpt-4o": ModelInfo(context_window=128_000, max_output_tokens=16_384),
     "o1": ModelInfo(context_window=200_000, max_output_tokens=100_000),
+    "llama-3.3-70b": ModelInfo(context_window=128_000, max_output_tokens=8_192),
+    "llama-3.1-8b": ModelInfo(context_window=128_000, max_output_tokens=8_192),
+    "mixtral-8x7b": ModelInfo(context_window=32_768, max_output_tokens=4_096),
 }
 
 # Fallbacks for unknown models -- match the harness's historical hardcoded

@@ -68,6 +68,32 @@ def test_factory_wraps_fallback_model():
     print("  factory wraps a FallbackProvider only when fallback_model is set OK")
 
 
+def test_factory_resolves_prefix_specific_keys():
+    os.environ["GROQ_API_KEY"] = "groq_secret_key"
+    try:
+        provider = build_provider(Config(model="groq/llama3", api_key="default_key"))
+        assert provider.client.api_key == "groq_secret_key"
+    finally:
+        del os.environ["GROQ_API_KEY"]
+    print("  factory resolves prefix-specific API keys OK")
+
+
+def test_factory_resolves_prefix_specific_base_urls():
+    config = Config(
+        model="openai/gemini-3.1-flash-lite",
+        api_key="gemini_key",
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+        fallback_model="groq/llama3",
+    )
+    provider = build_provider(config)
+    assert isinstance(provider, FallbackProvider)
+    # The primary provider should use the custom base_url (Gemini)
+    assert str(provider.primary.client.base_url) == "https://generativelanguage.googleapis.com/v1beta/openai/"
+    # The fallback provider should use the Groq base_url, NOT the custom base_url
+    assert str(provider.fallback.client.base_url) == "https://api.groq.com/openai/v1/"
+    print("  factory separates base_urls for fallback models correctly OK")
+
+
 def main():
     test_substring_lookup()
     test_explicit_override_always_wins()
@@ -75,6 +101,8 @@ def main():
     test_unknown_model_uses_historical_defaults()
     test_factory_resolves_anthropic_max_tokens()
     test_factory_wraps_fallback_model()
+    test_factory_resolves_prefix_specific_keys()
+    test_factory_resolves_prefix_specific_base_urls()
     print("MODEL INFO TESTS PASSED")
 
 
