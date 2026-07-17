@@ -133,6 +133,27 @@ def _run():
     assert "tool_result" in events, events
     assert "answer" in events and events[-1] == "done", events
     assert "all done" in body  # the final answer text made it into the stream
+
+    # TOKEN streaming (D35): a provider that streams deltas -> `token` events
+    # carrying incremental text arrive over SSE.
+    class StreamingProvider(Provider):
+        def complete(self, messages, tools):
+            return Response(text="streamed reply", tool_calls=[],
+                            assistant_message={"role": "assistant", "content": "streamed reply"})
+        def stream(self, messages, tools):
+            for piece in ("stream", "ed ", "reply"):
+                yield ("delta", piece)
+            yield ("response", self.complete(messages, tools))
+
+    server.build_provider = lambda config: StreamingProvider()
+    sid3 = client.post("/sessions", headers=a_auth).json()["session_id"]
+    with client.stream("POST", f"/sessions/{sid3}/messages/stream",
+                       headers=a_auth, json={"message": "go"}) as resp:
+        tbody = "".join(resp.iter_text())
+    tevents = [ln[len("event: "):] for ln in tbody.splitlines() if ln.startswith("event: ")]
+    assert tevents.count("token") == 3, tevents
+    assert '"delta": "stream"' in tbody and '"delta": "reply"' in tbody, tbody
+    print("  SSE token streaming: incremental delta events arrive OK")
     # streaming endpoint is auth-enforced + isolated too
     assert client.post(f"/sessions/{sid2}/messages/stream", headers=b_auth,
                        json={"message": "x"}).status_code == 404

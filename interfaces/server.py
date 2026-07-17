@@ -184,7 +184,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     def _user_config(username: str) -> Config:
         return state.config.for_user(username)
 
-    def _turn(username, user_id, session_id, message, on_event=None, approver=None):
+    def _turn(username, user_id, session_id, message, on_event=None, approver=None, stream=False):
         """Run one agent turn for a specific user+session in an ISOLATED
         execution context (D28): the memory/offload/workspace roots are set
         as ContextVars inside a copied context, so concurrent requests for
@@ -227,6 +227,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 on_event=on_event or (lambda *a: None),
                 conversation=conversation,
                 usage_tracker=usage,
+                stream=stream,  # token-level streaming when the caller asks (D35)
             )
             answer = agent.run(message)
             store.save(session_id, conversation)
@@ -337,7 +338,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             try:
                 answer, usage = _turn(
                     username, identity.user_id, session_id, body.message,
-                    on_event=on_event, approver=approver,
+                    on_event=on_event, approver=approver, stream=True,
                 )
                 loop.call_soon_threadsafe(q.put_nowait, ("answer", (answer, usage)))
             except Exception as exc:  # surfaced to the client as an error event
@@ -404,6 +405,8 @@ _APPROVAL_TIMEOUT_S = 300  # how long a turn waits for a human decision before d
 def _event_payload(kind: str, details: tuple) -> dict:
     """Map an orchestrator on_event (kind, *details) to a JSON SSE payload.
     Mirrors interfaces/cli.py's event handling, trimmed for the wire."""
+    if kind == "token":
+        return {"delta": details[0]}
     if kind == "thinking":
         return {"text": details[0]}
     if kind == "tool_call":

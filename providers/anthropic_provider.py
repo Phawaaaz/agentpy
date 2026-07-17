@@ -57,7 +57,37 @@ class AnthropicProvider(Provider):
         message = call_with_retries(
             lambda: self.client.messages.create(**kwargs), _RETRYABLE
         )
+        return self._to_response(message)
 
+    def stream(self, messages, tools):
+        """Stream Claude's turn: yield ("delta", text) as tokens arrive, then
+        a final ("response", Response) built from the completed message. Uses
+        the SDK's messages.stream context manager (D35)."""
+        system_text, native_messages = self._translate_messages(messages)
+        native_tools = self._translate_tools(tools)
+        kwargs: dict = {
+            "model": self.model,
+            "max_tokens": self.max_tokens,
+            "temperature": self.temperature,
+            "messages": native_messages,
+        }
+        if system_text:
+            kwargs["system"] = system_text
+        if native_tools:
+            kwargs["tools"] = native_tools
+
+        def _open():
+            return self.client.messages.stream(**kwargs)
+
+        manager = call_with_retries(_open, _RETRYABLE)
+        with manager as stream:
+            for text in stream.text_stream:
+                if text:
+                    yield ("delta", text)
+            final = stream.get_final_message()
+        yield ("response", self._to_response(final))
+
+    def _to_response(self, message) -> Response:
         # Split Claude's reply into text and tool-use blocks.
         text_parts: list[str] = []
         tool_calls: list[ToolCall] = []

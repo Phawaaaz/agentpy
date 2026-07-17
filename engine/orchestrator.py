@@ -33,6 +33,7 @@ class Orchestrator:
         conversation: Conversation | None = None,
         usage_tracker: UsageTracker | None = None,
         hooks: Hooks | None = None,
+        stream: bool = False,
     ) -> None:
         self.provider = provider
         self.registry = registry
@@ -44,6 +45,28 @@ class Orchestrator:
         self.usage = usage_tracker
         # Cross-cutting interception points (D32); empty = identical loop.
         self.hooks = hooks or Hooks()
+        # Token streaming (D35): when True, the model call goes through
+        # provider.stream() and each text delta is emitted as on_event("token").
+        # Default False = the historical blocking complete() path, unchanged.
+        self.stream = stream
+
+    def _model_call(self, messages, specs):
+        """One model call. In streaming mode, emit each text delta as a
+        `token` event and return the final Response; otherwise a plain
+        blocking complete(). Both return an identical Response, so the rest
+        of the loop is streaming-blind (D35)."""
+        if not self.stream:
+            return self.provider.complete(messages, specs)
+        final = None
+        for kind, payload in self.provider.stream(messages, specs):
+            if kind == "delta":
+                if payload:
+                    self.on_event("token", payload)
+            else:  # ("response", Response) -- always last
+                final = payload
+        if final is None:  # a provider that streamed no terminal response
+            final = self.provider.complete(messages, specs)
+        return final
 
     def run(self, user_input: str) -> str:
         """Run one user request to completion and return the final answer."""
@@ -59,7 +82,7 @@ class Orchestrator:
                 messages = pre_model(messages)
 
             started = time.monotonic()
-            response = self.provider.complete(messages, self.registry.specs())
+            response = self._model_call(messages, self.registry.specs())
             model_ms = int((time.monotonic() - started) * 1000)
             for post_model in self.hooks.post_model_call:
                 response = post_model(response)

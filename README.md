@@ -278,9 +278,11 @@ Notes:
   `GET /sessions/{id}/approvals` lists what's pending. No decision within
   the timeout → denied (fail-safe). In `allowlist` mode nothing needs
   approving. Non-streaming turns still deny `ask` (no channel to ask).
-- Streaming is event-level (thinking / tool calls / final answer stream
-  live); token-by-token model output would need provider-level streaming, a
-  later addition.
+- Streaming is **token-level**: the model's text arrives as incremental
+  `token` SSE events (`{"delta": "..."}`) as it's generated, alongside the
+  `thinking`/`tool_call`/`tool_result`/`answer` events (D35). Backed by real
+  SDK streaming in the Anthropic and OpenAI adapters; any provider without a
+  streaming override falls back to a single terminal event.
 - Each request runs in an isolated execution context (D28): memory/offload/
   workspace roots are per-user, so concurrent requests never cross.
 
