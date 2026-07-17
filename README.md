@@ -247,6 +247,66 @@ sessions with their last task. Regular users still see their own session's
 `/cost`. On login the CLI also issues and verifies a JWT (see DESIGN.md
 D30) — scaffolding the future server's per-request auth will reuse as-is.
 
+## HTTP API server (multi-user)
+
+Beyond the CLI, the harness runs as an HTTP API (`interfaces/server.py`, FastAPI)
+that turns the multi-user design into an enforced runtime: **every request
+carries a JWT**, and the `user_id` it verifies is the only key used to reach
+storage, so one user's token cannot touch another's data.
+
+```bash
+pip install -r requirements.txt -r requirements-server.txt
+export HARNESS_MODEL=anthropic/claude-opus-4-8 HARNESS_API_KEY=sk-...
+export HARNESS_JWT_SECRET=$(python3 -c "import secrets;print(secrets.token_hex(32))")
+uvicorn interfaces.server:app --host 0.0.0.0 --port 8000   # or: python main_server.py
+```
+
+Endpoints: `POST /auth/register`, `POST /auth/login` (→ JWT), `GET /auth/me`;
+`GET/POST /sessions`, `DELETE /sessions/{id}`, `POST /sessions/{id}/messages`
+(runs one agent turn), `POST /sessions/{id}/messages/stream` (the same turn
+as **Server-Sent Events** — `thinking`/`tool_call`/`tool_result`/`answer`
+events arrive live so a UI isn't blocked); admin-only
+`GET /admin/usage[/{username}]`; `GET /health`.
+
+Notes:
+- The first registered account becomes **admin**. Auth is now enforced
+  per-request (unlike the CLI's login scaffolding).
+- **Human-in-the-loop approval** works over the streaming endpoint: in
+  `ask` mode, a write/dangerous tool emits an `approval_required` SSE event
+  and the turn blocks until the client resolves it with
+  `POST /sessions/{id}/approvals/{approval_id}` (`{"approved": true|false}`);
+  `GET /sessions/{id}/approvals` lists what's pending. No decision within
+  the timeout → denied (fail-safe). In `allowlist` mode nothing needs
+  approving. Non-streaming turns still deny `ask` (no channel to ask).
+- Streaming is event-level (thinking / tool calls / final answer stream
+  live); token-by-token model output would need provider-level streaming, a
+  later addition.
+- Each request runs in an isolated execution context (D28): memory/offload/
+  workspace roots are per-user, so concurrent requests never cross.
+
+### Deploy
+
+`Dockerfile` + `docker-compose.yml` bring up the API plus Postgres:
+
+```bash
+cp .env.example .env    # set HARNESS_API_KEY, HARNESS_JWT_SECRET, POSTGRES_PASSWORD
+docker compose up --build
+```
+
+The compose file points `HARNESS_DB_URL` at Postgres and sets safe server
+defaults (`HARNESS_CONFINE_WORKSPACE=true`, `allowlist`). The container-based
+command sandbox (`HARNESS_SANDBOX=docker`) needs an external Docker daemon;
+enable it with the isolated dind-sidecar override:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.sandbox.yml up --build
+```
+
+See **[DEPLOY.md](DEPLOY.md)** for the full deployment guide — the three ways
+to give the sandbox a Docker daemon (host socket vs. dind sidecar vs.
+running on a Docker host), getting Docker on a fresh box, and a production
+checklist.
+
 ## Permission modes (set `HARNESS_PERMISSION_MODE` in `.env`)
 
 | Mode | Behavior |

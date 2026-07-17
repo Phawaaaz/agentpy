@@ -1,0 +1,7 @@
+# HTTP server interface (interfaces/server.py). Install alongside
+# requirements.txt only when running the API server:
+#   pip install -r requirements.txt -r requirements-server.txt
+fastapi>=0.110
+uvicorn[standard]>=0.29
+# psycopg (v3) for a Postgres HARNESS_DB_URL in production; SQLite needs nothing.
+# psycopg[binary]>=3.1

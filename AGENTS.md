@@ -75,6 +75,7 @@ pip install -r requirements.txt
 python tests/smoke_test.py        # prints: SMOKE TEST PASSED
 python tests/phase2_test.py       # prints: PHASE 2 TESTS PASSED
 python tests/mcp_test.py          # prints: MCP TESTS PASSED
+python tests/mcp_real_test.py     # prints: MCP REAL TESTS PASSED (real stdio server)
 python tests/pipeline_test.py     # prints: PIPELINE TESTS PASSED
 python tests/memory_test.py       # prints: MEMORY TESTS PASSED
 python tests/cli_skills_test.py   # prints: CLI SKILLS TESTS PASSED
@@ -96,13 +97,16 @@ python tests/usage_store_test.py  # prints: USAGE STORE TESTS PASSED
 python tests/hooks_test.py        # prints: HOOKS TESTS PASSED
 python tests/search_files_test.py # prints: SEARCH FILES TESTS PASSED
 python tests/sandbox_test.py      # prints: SANDBOX TESTS PASSED
+python tests/fixes_test.py        # prints: FIXES TESTS PASSED
+python tests/server_test.py       # prints: SERVER TESTS PASSED (needs requirements-server.txt)
 
 # run for real (after: cp .env.example .env; set HARNESS_MODEL + HARNESS_API_KEY):
 python main.py                    # interactive CLI
 python pipeline.py "<task>"       # autonomous multi-stage pipeline (see pipeline/)
+uvicorn interfaces.server:app     # HTTP API server (pip install -r requirements-server.txt; D34)
 ```
 
-**Always run all twenty-four test files after a change** and keep them passing.
+**Always run all twenty-seven test files after a change** and keep them passing.
 New core logic must be testable with fakes — if it can only be tested against a
 live API, it's in the wrong layer.
 
