@@ -36,11 +36,12 @@ from config import Config
 from context_engine.compaction import Conversation, make_provider_summarizer
 from engine.orchestrator import Orchestrator
 from engine.registry import registry
-from observability.usage import UsageTracker
+from observability.usage_store import PersistentUsageTracker
 from providers.factory import build_provider
 from providers.model_info import effective_context_budget, effective_max_tokens
 from server.demo_provider import DemoProvider
 from storage.db import make_engine
+from storage.models import ROLE_ADMIN, Session as SessionRow, UsageLog, User
 from storage.session_store import DbSessionStore
 from storage.user_store import DbUserStore
 
@@ -74,6 +75,16 @@ class NewSession(BaseModel):
 class Message(BaseModel):
     message: str
     model: str | None = None  # optional per-turn model switch
+
+
+class NewUser(BaseModel):
+    username: str
+    password: str
+    role: str = "user"  # "user" or "admin"
+
+
+class RoleUpdate(BaseModel):
+    role: str  # "user" or "admin"
 
 
 @dataclass
@@ -243,10 +254,16 @@ def create_app(config: Config | None = None) -> FastAPI:
                     summarizer=make_provider_summarizer(provider),
                 )
                 store.load(sid, conv)
+                # Persist per-call usage so the admin dashboard has real
+                # token/cost numbers attributed to this user + session.
+                usage = PersistentUsageTracker(
+                    db_engine, p.user_id, session_id_fn=lambda: sid,
+                    task_fn=lambda: body.message,
+                )
                 agent = Orchestrator(
                     provider, registry, replace(user_config, permission_mode="allowlist"),
                     approver=lambda c, t: True, on_event=on_event,
-                    conversation=conv, usage_tracker=UsageTracker(), stream=True,
+                    conversation=conv, usage_tracker=usage, stream=True,
                 )
                 answer = agent.run(body.message)
                 store.save(sid, conv)
@@ -271,6 +288,54 @@ def create_app(config: Config | None = None) -> FastAPI:
         return StreamingResponse(sse(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
+    # --- admin (role=admin only) -----------------------------------------
+
+    def _require_admin(p: Principal):
+        if p.role != ROLE_ADMIN:
+            raise HTTPException(403, "admin only")
+
+    @app.get("/admin/stats")
+    def admin_stats(p: Principal = Depends(principal)):
+        _require_admin(p)
+        return _collect_stats(db_engine)
+
+    @app.post("/admin/users", status_code=201)
+    def admin_create_user(body: NewUser, p: Principal = Depends(principal)):
+        _require_admin(p)
+        uname = body.username.strip()
+        if not uname or not body.password:
+            raise HTTPException(400, "username and password are required")
+        if users.exists(uname):
+            raise HTTPException(409, "user already exists")
+        uid = users.register(uname, body.password)
+        if body.role == ROLE_ADMIN:
+            _set_role(db_engine, uname, ROLE_ADMIN)
+        return {"username": uname, "user_id": uid, "role": body.role}
+
+    @app.patch("/admin/users/{username}/role")
+    def admin_set_role(username: str, body: RoleUpdate, p: Principal = Depends(principal)):
+        _require_admin(p)
+        if body.role not in ("user", ROLE_ADMIN):
+            raise HTTPException(400, "role must be 'user' or 'admin'")
+        if not users.exists(username):
+            raise HTTPException(404, "no such user")
+        # Don't allow demoting the last admin (would lock everyone out).
+        if body.role == "user" and _admin_count(db_engine) <= 1 and users.role(username) == ROLE_ADMIN:
+            raise HTTPException(409, "cannot demote the last admin")
+        _set_role(db_engine, username, body.role)
+        return {"username": username, "role": body.role}
+
+    @app.delete("/admin/users/{username}", status_code=204)
+    def admin_delete_user(username: str, p: Principal = Depends(principal)):
+        _require_admin(p)
+        if username == _username(p.user_id):
+            raise HTTPException(409, "you cannot delete your own account")
+        if not users.exists(username):
+            raise HTTPException(404, "no such user")
+        if users.role(username) == ROLE_ADMIN and _admin_count(db_engine) <= 1:
+            raise HTTPException(409, "cannot delete the last admin")
+        _delete_user(db_engine, username)
+
     @app.get("/health")
     def health():
         return {"status": "ok", "fake": FAKE_ALL, "models": DEMO_MODELS}
@@ -280,6 +345,94 @@ def create_app(config: Config | None = None) -> FastAPI:
 
 def _fmt(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+# --- admin data access (module-level so it's easy to test) ----------------
+
+def _collect_stats(engine) -> dict:
+    """Per-user rows (sessions, messages, model calls, tokens, cost) plus a
+    global totals row. Lists every user, including those with no activity."""
+    from sqlalchemy import func, select
+    from sqlalchemy.orm import Session as OrmSession
+
+    with OrmSession(engine) as db:
+        users = list(db.execute(select(User.id, User.username, User.role)))
+
+        # sessions + message counts per user (parse each snapshot once)
+        sessions = {}   # user_id -> session count
+        messages = {}   # user_id -> user+assistant message count
+        for uid, snap in db.execute(select(SessionRow.user_id, SessionRow.snapshot_json)):
+            sessions[uid] = sessions.get(uid, 0) + 1
+            try:
+                msgs = json.loads(snap).get("messages", [])
+                messages[uid] = messages.get(uid, 0) + sum(
+                    1 for m in msgs if m.get("role") in ("user", "assistant")
+                )
+            except Exception:
+                pass
+
+        # token / cost / call counts per user from the usage log
+        usage_rows = db.execute(
+            select(
+                UsageLog.user_id,
+                func.count(UsageLog.id),
+                func.coalesce(func.sum(UsageLog.prompt_tokens), 0),
+                func.coalesce(func.sum(UsageLog.completion_tokens), 0),
+                func.coalesce(func.sum(UsageLog.cost_usd), 0.0),
+            ).group_by(UsageLog.user_id)
+        )
+        usage = {r[0]: (r[1], r[2], r[3], r[4]) for r in usage_rows}
+
+    rows, totals = [], {"sessions": 0, "messages": 0, "calls": 0,
+                        "prompt_tokens": 0, "completion_tokens": 0, "cost_usd": 0.0}
+    for uid, username, role in users:
+        calls, pt, ct, cost = usage.get(uid, (0, 0, 0, 0.0))
+        row = {
+            "username": username, "role": role,
+            "sessions": sessions.get(uid, 0),
+            "messages": messages.get(uid, 0),
+            "calls": calls,
+            "prompt_tokens": pt, "completion_tokens": ct,
+            "total_tokens": pt + ct, "cost_usd": round(cost, 4),
+        }
+        rows.append(row)
+        for k in ("sessions", "messages", "calls", "prompt_tokens", "completion_tokens"):
+            totals[k] += row[k]
+        totals["cost_usd"] += cost
+    rows.sort(key=lambda r: (r["total_tokens"], r["sessions"]), reverse=True)
+    totals["total_tokens"] = totals["prompt_tokens"] + totals["completion_tokens"]
+    totals["cost_usd"] = round(totals["cost_usd"], 4)
+    totals["users"] = len(rows)
+    return {"users": rows, "totals": totals}
+
+
+def _admin_count(engine) -> int:
+    from sqlalchemy import func, select
+    from sqlalchemy.orm import Session as OrmSession
+    with OrmSession(engine) as db:
+        return db.scalar(select(func.count(User.id)).where(User.role == ROLE_ADMIN)) or 0
+
+
+def _set_role(engine, username: str, role: str) -> None:
+    from sqlalchemy import update
+    from sqlalchemy.orm import Session as OrmSession
+    with OrmSession(engine) as db:
+        db.execute(update(User).where(User.username == username).values(role=role))
+        db.commit()
+
+
+def _delete_user(engine, username: str) -> None:
+    """Remove a user and their sessions + usage rows."""
+    from sqlalchemy import delete, select
+    from sqlalchemy.orm import Session as OrmSession
+    with OrmSession(engine) as db:
+        uid = db.scalar(select(User.id).where(User.username == username))
+        if uid is None:
+            return
+        db.execute(delete(UsageLog).where(UsageLog.user_id == uid))
+        db.execute(delete(SessionRow).where(SessionRow.user_id == uid))
+        db.execute(delete(User).where(User.id == uid))
+        db.commit()
 
 
 app = create_app()
