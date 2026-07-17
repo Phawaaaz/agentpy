@@ -99,6 +99,7 @@ python tests/search_files_test.py # prints: SEARCH FILES TESTS PASSED
 python tests/sandbox_test.py      # prints: SANDBOX TESTS PASSED
 python tests/fixes_test.py        # prints: FIXES TESTS PASSED
 python tests/server_test.py       # prints: SERVER TESTS PASSED (needs requirements-server.txt)
+python tests/streaming_test.py    # prints: STREAMING TESTS PASSED (token streaming, D35)
 
 # run for real (after: cp .env.example .env; set HARNESS_MODEL + HARNESS_API_KEY):
 python main.py                    # interactive CLI
@@ -106,7 +107,7 @@ python pipeline.py "<task>"       # autonomous multi-stage pipeline (see pipelin
 uvicorn interfaces.server:app     # HTTP API server (pip install -r requirements-server.txt; D34)
 ```
 
-**Always run all twenty-seven test files after a change** and keep them passing.
+**Always run all twenty-eight test files after a change** and keep them passing.
 New core logic must be testable with fakes — if it can only be tested against a
 live API, it's in the wrong layer.
 

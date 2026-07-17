@@ -840,6 +840,32 @@ socket/DinD and is off in the default compose. Verified by
 `tests/server_test.py` (TestClient: auth enforcement, cross-user isolation,
 a real turn, admin gating) and a live uvicorn run driven with curl.
 
+### D35 — Token-level streaming via an optional Provider.stream, opt-in on the loop
+**Decision:** `providers/base.py` gains a concrete `Provider.stream(messages,
+tools)` that yields `("delta", text)` chunks then a final `("response",
+Response)`. The base default just wraps `complete()` (one terminal response,
+no deltas), so every existing/fake provider keeps working unchanged (Liskov).
+`AnthropicProvider` and `OpenAIProvider` override it with real SDK streaming
+-- Anthropic via `messages.stream`, OpenAI via `stream=True` (reassembling
+its fragmented tool-call arguments by index before the terminal Response).
+`Orchestrator` gains `stream: bool = False`; when True the model call goes
+through `provider.stream()` and each delta is emitted as `on_event("token",
+delta)`. The final Response is identical in shape either way, so the rest of
+the loop is streaming-blind. The HTTP streaming endpoint sets `stream=True`
+and maps `token` -> a `{"delta": ...}` SSE event; the client now sees model
+text token-by-token, not just event-level.
+**Why edit the loop (again, deliberately):** token streaming is the one
+thing that genuinely needs the loop to consume the model call differently --
+the same category as D32 hooks. It's isolated to a single `_model_call`
+helper and gated behind `stream=False` by default, so the CLI, the pipeline,
+and non-streaming HTTP turns run the byte-identical blocking path. Recorded
+here rather than hidden.
+**Trade-off:** streaming providers must keep their streamed final Response
+byte-identical to `complete()`'s (tool calls, usage, assistant_message) or
+the loop would behave differently in streaming vs. blocking mode -- covered
+by the OpenAI reassembly test. Live token streaming needs a real key; the
+contract and the reassembly are tested with fakes/mocked chunks.
+
 ---
 
 ## Known limitations & future work

@@ -88,3 +88,83 @@ class OpenAIProvider(Provider):
             assistant_message=assistant_message,
             usage=usage,
         )
+
+    def stream(self, messages: list[dict], tools: list[dict]):
+        """Stream the turn: yield ("delta", text) as content tokens arrive,
+        then a final ("response", Response). OpenAI streams tool-call
+        arguments in fragments, so those are reassembled by index before the
+        terminal Response is built (D35)."""
+        kwargs: dict = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": self.temperature,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        if tools:
+            kwargs["tools"] = tools
+            kwargs["tool_choice"] = "auto"
+
+        def _create():
+            try:
+                return self.client.chat.completions.create(**kwargs)
+            except openai.BadRequestError:
+                # Some OpenAI-compatible endpoints reject `stream_options`;
+                # drop it and retry so streaming still works (usage may be
+                # absent for that turn). A genuinely bad request fails again.
+                kwargs.pop("stream_options", None)
+                return self.client.chat.completions.create(**kwargs)
+
+        stream = call_with_retries(_create, _RETRYABLE)
+
+        text_parts: list[str] = []
+        # index -> {"id", "name", "args"} accumulated across fragments
+        tool_frags: dict[int, dict] = {}
+        usage = None
+        for chunk in stream:
+            if getattr(chunk, "usage", None) is not None:
+                usage = Usage(
+                    prompt_tokens=chunk.usage.prompt_tokens or 0,
+                    completion_tokens=chunk.usage.completion_tokens or 0,
+                )
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            if delta is None:
+                continue
+            if delta.content:
+                text_parts.append(delta.content)
+                yield ("delta", delta.content)
+            for tc in delta.tool_calls or []:
+                frag = tool_frags.setdefault(tc.index, {"id": "", "name": "", "args": ""})
+                if tc.id:
+                    frag["id"] = tc.id
+                if tc.function and tc.function.name:
+                    frag["name"] = tc.function.name
+                if tc.function and tc.function.arguments:
+                    frag["args"] += tc.function.arguments
+
+        text = "".join(text_parts)
+        tool_calls: list[ToolCall] = []
+        neutral_tool_calls: list[dict] = []
+        for _idx, frag in sorted(tool_frags.items()):
+            try:
+                arguments = json.loads(frag["args"] or "{}")
+            except json.JSONDecodeError:
+                arguments = {}
+            tool_calls.append(ToolCall(id=frag["id"], name=frag["name"], arguments=arguments))
+            neutral_tool_calls.append({
+                "id": frag["id"], "type": "function",
+                "function": {"name": frag["name"], "arguments": frag["args"] or "{}"},
+            })
+
+        assistant_message: dict = {"role": "assistant", "content": text}
+        if neutral_tool_calls:
+            assistant_message["tool_calls"] = neutral_tool_calls
+
+        yield ("response", Response(
+            text=text or None,
+            tool_calls=tool_calls,
+            assistant_message=assistant_message,
+            usage=usage,
+        ))
