@@ -147,12 +147,69 @@ def test_openai_stream_falls_back_when_stream_options_rejected():
     print("  OpenAI stream falls back gracefully when stream_options is rejected OK")
 
 
+def test_openai_retries_malformed_tool_call():
+    """A weaker model can emit a malformed tool call that the endpoint rejects
+    with a 400 'tool_use_failed'. Because it's stochastic, the adapter must
+    re-roll a bounded number of times (and recover), rather than crashing the
+    turn on the first bad generation."""
+    import httpx
+    import openai
+    from providers.openai_provider import OpenAIProvider
+
+    class D:
+        def __init__(self, **kw): self.__dict__.update(kw)
+
+    def tool_use_failed():
+        return openai.BadRequestError(
+            "Failed to call a function.",
+            response=httpx.Response(400, request=httpx.Request("POST", "http://x")),
+            body={"error": {"code": "tool_use_failed"}},
+        )
+
+    def good():
+        msg = D(content="hi", tool_calls=None)
+        return D(choices=[D(message=msg)], usage=D(prompt_tokens=1, completion_tokens=1))
+
+    provider = OpenAIProvider(model="groq/llama", api_key="x")
+
+    # Fails twice with tool_use_failed, then produces a valid completion.
+    calls = {"n": 0}
+    def flaky(**kw):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise tool_use_failed()
+        return good()
+    provider.client.chat.completions.create = flaky
+    resp = provider.complete([], [{"type": "function"}])
+    assert resp.text == "hi" and calls["n"] == 3, (resp.text, calls["n"])
+
+    # A different 400 must NOT be re-rolled — it fails fast.
+    calls2 = {"n": 0}
+    def other_400(**kw):
+        calls2["n"] += 1
+        raise openai.BadRequestError(
+            "bad param",
+            response=httpx.Response(400, request=httpx.Request("POST", "http://x")),
+            body={"error": {"code": "invalid_request_error"}},
+        )
+    provider.client.chat.completions.create = other_400
+    try:
+        provider.complete([], [])
+    except openai.BadRequestError:
+        pass
+    else:
+        raise AssertionError("an unrelated 400 must not be retried")
+    assert calls2["n"] == 1, calls2["n"]
+    print("  OpenAI adapter re-rolls a malformed tool call, fails fast on other 400s OK")
+
+
 def main():
     test_base_stream_default_wraps_complete()
     test_orchestrator_emits_token_events_when_streaming()
     test_orchestrator_no_tokens_when_not_streaming()
     test_openai_stream_reassembles_text_and_tool_calls()
     test_openai_stream_falls_back_when_stream_options_rejected()
+    test_openai_retries_malformed_tool_call()
     print("STREAMING TESTS PASSED")
 
 
