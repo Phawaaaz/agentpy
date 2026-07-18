@@ -1,0 +1,20 @@
+# Backend image: the FastAPI app (server/app.py) over the harness.
+# Build context is the repo root:  docker build -f deploy/Dockerfile.backend .
+FROM python:3.11-slim
+
+# Faster, quieter Python in a container.
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+# Install dependencies first (better layer caching). psycopg[binary] is the
+# PostgreSQL driver used when HARNESS_DB_URL points at Postgres.
+COPY requirements.txt requirements-server.txt ./
+RUN pip install -r requirements.txt -r requirements-server.txt "psycopg[binary]>=3.1"
+
+# App code.
+COPY . .
+
+EXPOSE 8000
+# server.app's main() runs uvicorn on 0.0.0.0:8000.
+CMD ["python", "-m", "server.app"]

@@ -5,7 +5,11 @@
 // response body with fetch + a stream reader and parse the `event:`/`data:`
 // frames by hand, invoking onEvent(type, data) for each.
 
-const BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000'
+// API origin. In dev the Vite server (:5173) and the API (:8000) differ, so
+// default to localhost:8000. In a production build we default to same-origin
+// ('') so the app calls whatever host served it — a reverse proxy (nginx)
+// forwards the API paths to the backend. Override with VITE_API_BASE.
+const BASE = import.meta.env.VITE_API_BASE ?? (import.meta.env.DEV ? 'http://localhost:8000' : '')
 
 function authHeaders(token) {
   return token ? { Authorization: `Bearer ${token}` } : {}
