@@ -60,6 +60,35 @@ export async function getMessages(token, sid) {
   }))
 }
 
+// --- admin (role=admin only) ---
+
+export async function getAdminStats(token) {
+  return jsonOrThrow(await fetch(`${BASE}/admin/stats`, { headers: authHeaders(token) }))
+}
+
+export async function adminCreateUser(token, { username, password, role }) {
+  return jsonOrThrow(await fetch(`${BASE}/admin/users`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+    body: JSON.stringify({ username, password, role }),
+  }))
+}
+
+export async function adminSetRole(token, username, role) {
+  return jsonOrThrow(await fetch(`${BASE}/admin/users/${username}/role`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+    body: JSON.stringify({ role }),
+  }))
+}
+
+export async function adminDeleteUser(token, username) {
+  return jsonOrThrow(await fetch(`${BASE}/admin/users/${username}`, {
+    method: 'DELETE',
+    headers: authHeaders(token),
+  }))
+}
+
 // Stream a turn. Calls onEvent(type, data) for every SSE frame; returns a
 // controller with abort(). Resolves the returned promise when the stream ends.
 export function streamTurn(token, sid, message, model, onEvent) {

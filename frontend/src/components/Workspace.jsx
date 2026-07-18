@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import Sidebar from './Sidebar.jsx'
 import TopBar from './TopBar.jsx'
 import Message from './Message.jsx'
+import AdminDashboard from './AdminDashboard.jsx'
 import {
   getModels, listSessions, createSession, deleteSession, getMessages, streamTurn,
 } from '../api.js'
@@ -20,6 +21,8 @@ export default function Workspace({ auth, onLogout }) {
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
   const [error, setError] = useState('')
+  const [view, setView] = useState('chat')  // 'chat' | 'admin'
+  const isAdmin = user.role === 'admin'
 
   const chatRef = useRef(null)
   const streamRef = useRef(null)
@@ -196,11 +199,15 @@ export default function Workspace({ auth, onLogout }) {
   return (
     <div className="app">
       <Sidebar
-        user={user} sessions={sessions} activeId={activeId}
-        onSelect={(sid) => { const s = sessions.find((x) => x.session_id === sid); selectSession(sid, s?.model) }}
-        onNew={newSession} onDelete={removeSession} onLogout={onLogout}
+        user={user} sessions={sessions} activeId={view === 'chat' ? activeId : null}
+        onSelect={(sid) => { setView('chat'); const s = sessions.find((x) => x.session_id === sid); selectSession(sid, s?.model) }}
+        onNew={() => { setView('chat'); newSession() }} onDelete={removeSession} onLogout={onLogout}
+        isAdmin={isAdmin} onAdmin={() => setView('admin')} adminActive={view === 'admin'}
       />
 
+      {view === 'admin' ? (
+        <AdminDashboard token={token} me={user.username} onClose={() => setView('chat')} />
+      ) : (
       <div className="main">
         <TopBar
           models={models} model={model} onModelChange={changeModel}
@@ -252,6 +259,7 @@ export default function Workspace({ auth, onLogout }) {
           </div>
         </div>
       </div>
+      )}
     </div>
   )
 }

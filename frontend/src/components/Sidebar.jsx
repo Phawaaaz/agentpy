@@ -1,4 +1,5 @@
-export default function Sidebar({ user, sessions, activeId, onSelect, onNew, onDelete, onLogout }) {
+export default function Sidebar({ user, sessions, activeId, onSelect, onNew, onDelete, onLogout,
+                                  isAdmin, onAdmin, adminActive }) {
   const initial = (user.username || '?')[0].toUpperCase()
 
   return (
@@ -29,6 +30,12 @@ export default function Sidebar({ user, sessions, activeId, onSelect, onNew, onD
           ))
         )}
       </div>
+
+      {isAdmin && (
+        <button className={'btn-admin' + (adminActive ? ' active' : '')} onClick={onAdmin}>
+          ⚙ Admin dashboard
+        </button>
+      )}
 
       <div className="user-badge">
         <div className="avatar">{initial}</div>
