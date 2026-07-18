@@ -121,6 +121,50 @@ def test_fallback_failure_propagates():
     print("  when both fail, the fallback's error propagates OK")
 
 
+def test_fallback_chain_falls_through_multiple_levels():
+    """A comma-separated HARNESS_FALLBACK_MODEL builds a nested chain: the
+    factory folds one FallbackProvider per level, so a dead primary + dead
+    first fallback still lands on the last one."""
+    from config import Config
+    from providers.factory import _fallback_chain
+
+    assert _fallback_chain("a/b, c/d") == ["a/b", "c/d"]
+    assert _fallback_chain(None) == [] and _fallback_chain("") == []
+
+    a = _FakeProvider(fail_with=ConnectionError("gemma down"))
+    b = _FakeProvider(fail_with=ConnectionError("gemini down"))
+    c = _FakeProvider(reply="groq")
+    # mimic build_provider's left fold: primary -> b -> c
+    chain = FallbackProvider(FallbackProvider(a, b), c)
+    assert chain.complete([], []).text == "groq"
+    assert a.calls == 1 and b.calls == 1 and c.calls == 1
+    print("  3-model fallback chain falls through to the last model OK")
+
+
+def test_fallback_stream_switches_before_first_token():
+    """Streaming falls back when the primary dies on its first event, and
+    preserves the fallback's deltas (keeps the live-typing effect)."""
+    class _StreamProvider(Provider):
+        def __init__(self, ok, reply="x"):
+            self.ok, self.reply = ok, reply
+        def complete(self, m, t):
+            return Response(text=self.reply, tool_calls=[],
+                            assistant_message={"role": "assistant", "content": self.reply})
+        def stream(self, m, t):
+            if not self.ok:
+                raise ConnectionError("primary down")
+                yield  # unreachable; makes this a generator
+            for w in ["he", "llo"]:
+                yield ("delta", w)
+            yield ("response", self.complete(m, t))
+
+    chain = FallbackProvider(_StreamProvider(ok=False), _StreamProvider(ok=True, reply="hello"))
+    events = list(chain.stream([], []))
+    assert [d for k, d in events if k == "delta"] == ["he", "llo"]
+    assert [d.text for k, d in events if k == "response"] == ["hello"]
+    print("  streaming falls back before first token and keeps deltas OK")
+
+
 def main():
     test_succeeds_after_transient_failures()
     test_raises_after_exhausting_attempts()
@@ -128,6 +172,8 @@ def main():
     test_fallback_unused_when_primary_succeeds()
     test_fallback_used_when_primary_fails()
     test_fallback_failure_propagates()
+    test_fallback_chain_falls_through_multiple_levels()
+    test_fallback_stream_switches_before_first_token()
     print("RETRY/FALLBACK TESTS PASSED")
 
 
