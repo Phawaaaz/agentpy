@@ -22,6 +22,26 @@ _RETRYABLE = (
     openai.InternalServerError,
 )
 
+# Weaker models sometimes emit a malformed tool call (e.g. a Llama/Hermes
+# "<function=name{...}>" tag instead of JSON). Some endpoints -- notably Groq
+# -- reject the whole request with a 400 whose error code is
+# "tool_use_failed". Because the model is stochastic, re-rolling the same
+# request usually produces a valid call (or a plain answer), so we retry a
+# bounded number of times before giving up -- at which point a configured
+# fallback model can take over.
+_TOOL_RETRY_ATTEMPTS = 3
+
+
+def _is_tool_use_failed(exc: Exception) -> bool:
+    if not isinstance(exc, openai.BadRequestError):
+        return False
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        err = body.get("error")
+        if isinstance(err, dict) and err.get("code") == "tool_use_failed":
+            return True
+    return "tool_use_failed" in str(exc)
+
 
 class OpenAIProvider(Provider):
     def __init__(
@@ -36,6 +56,21 @@ class OpenAIProvider(Provider):
         # base_url=None => real OpenAI. Set it for any compatible server.
         self.client = OpenAI(api_key=api_key, base_url=base_url)
 
+    def _create(self, make_call):
+        """Run `make_call` (which performs one chat.completions.create) with
+        the transient-failure retries, plus a bounded retry when the endpoint
+        rejects a malformed tool call ('tool_use_failed'). On the final
+        failure the exception propagates so a fallback model can take over."""
+        last: Exception | None = None
+        for _ in range(_TOOL_RETRY_ATTEMPTS):
+            try:
+                return call_with_retries(make_call, _RETRYABLE)
+            except openai.BadRequestError as exc:
+                if not _is_tool_use_failed(exc):
+                    raise
+                last = exc  # re-roll: the model may format the call correctly
+        raise last  # type: ignore[misc]
+
     def complete(self, messages: list[dict], tools: list[dict]) -> Response:
         kwargs: dict = {
             "model": self.model,
@@ -46,9 +81,7 @@ class OpenAIProvider(Provider):
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
 
-        completion = call_with_retries(
-            lambda: self.client.chat.completions.create(**kwargs), _RETRYABLE
-        )
+        completion = self._create(lambda: self.client.chat.completions.create(**kwargs))
         message = completion.choices[0].message
 
         tool_calls: list[ToolCall] = []
@@ -108,14 +141,16 @@ class OpenAIProvider(Provider):
         def _create():
             try:
                 return self.client.chat.completions.create(**kwargs)
-            except openai.BadRequestError:
+            except openai.BadRequestError as exc:
+                if _is_tool_use_failed(exc):
+                    raise  # let the tool-retry wrapper re-roll this one
                 # Some OpenAI-compatible endpoints reject `stream_options`;
                 # drop it and retry so streaming still works (usage may be
                 # absent for that turn). A genuinely bad request fails again.
                 kwargs.pop("stream_options", None)
                 return self.client.chat.completions.create(**kwargs)
 
-        stream = call_with_retries(_create, _RETRYABLE)
+        stream = self._create(_create)
 
         text_parts: list[str] = []
         # index -> {"id", "name", "args"} accumulated across fragments
