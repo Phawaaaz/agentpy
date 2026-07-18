@@ -1,0 +1,65 @@
+# One-command deployment: PostgreSQL + backend (FastAPI/harness) + frontend
+# (nginx serving the SPA and proxying the API).
+#
+#   cd deploy
+#   cp .env.example .env      # then edit .env
+#   docker compose up -d --build
+#
+# The app is then at http://<this-server>/  — users just open a browser.
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: harness
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: harness
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U harness -d harness"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.backend
+    restart: unless-stopped
+    environment:
+      # Storage -> Postgres. Tables are created automatically on first boot.
+      HARNESS_DB_URL: postgresql+psycopg://harness:${POSTGRES_PASSWORD}@db:5432/harness
+      # Fixed signing secret so logins survive restarts (generate a long random
+      # value — see .env.example). Without it, a random one is used each boot.
+      HARNESS_JWT_SECRET: ${HARNESS_JWT_SECRET:?set HARNESS_JWT_SECRET in .env}
+      # Keep the agent inside its per-session workspace (off the host).
+      HARNESS_CONFINE_WORKSPACE: "true"
+      HARNESS_WORKSPACE_DIR: /data/workspaces
+      # Model config. Defaults to the offline scripted provider; set a real
+      # model + key to use one (see .env.example).
+      HARNESS_MODEL: ${HARNESS_MODEL:-demo/scripted}
+      HARNESS_BASE_URL: ${HARNESS_BASE_URL:-}
+      HARNESS_API_KEY: ${HARNESS_API_KEY:-}
+      HARNESS_FALLBACK_MODEL: ${HARNESS_FALLBACK_MODEL:-}
+      HARNESS_DEMO_FAKE: ${HARNESS_DEMO_FAKE:-}
+    volumes:
+      - workspaces:/data/workspaces
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.frontend
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
+  workspaces:
