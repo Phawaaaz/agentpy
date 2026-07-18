@@ -23,16 +23,39 @@ export default function Workspace({ auth, onLogout }) {
 
   const chatRef = useRef(null)
   const streamRef = useRef(null)
+  const inputRef = useRef(null)
+  const initialized = useRef(false)  // guard: StrictMode mounts effects twice in dev
 
-  // --- initial load: models + sessions (+ resume last session) ---
+  // Focus the composer whenever a session is ready and we're not streaming,
+  // so the user can just start typing on arrival.
   useEffect(() => {
-    (async () => {
+    if (activeId && !streaming) inputRef.current?.focus()
+  }, [activeId, streaming])
+
+  // --- initial load: models, then resume the last session or start a fresh
+  //     one automatically so the user lands ready to chat (no manual click) ---
+  useEffect(() => {
+    if (initialized.current) return  // run the bootstrap exactly once
+    initialized.current = true
+    ;(async () => {
+      let defaultModel = 'demo/scripted'
       try {
         const m = await getModels(token)
         setModels(m.models)
-        setModel(m.default || m.models[0])
+        defaultModel = m.default || m.models[0]
+        setModel(defaultModel)
       } catch (e) { handleAuthError(e) }
-      await refreshSessions(true)
+      try {
+        const list = await listSessions(token)
+        setSessions(list)
+        const last = localStorage.getItem(LAST_SID_KEY)
+        const pick = list.find((s) => s.session_id === last) || list[0]
+        if (pick) {
+          selectSession(pick.session_id, pick.model)
+        } else {
+          await startSession(defaultModel)  // no sessions yet -> open one now
+        }
+      } catch (e) { handleAuthError(e) }
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -68,17 +91,22 @@ export default function Workspace({ auth, onLogout }) {
     } catch (e) { handleAuthError(e) }
   }
 
-  async function newSession() {
-    if (streaming) return
+  async function startSession(modelToUse) {
     try {
-      const s = await createSession(token, model)
+      const s = await createSession(token, modelToUse)
       setSessions((prev) => [...prev, s])
       setActiveId(s.session_id)
       localStorage.setItem(LAST_SID_KEY, s.session_id)
       setModel(s.model)
       setMessages([])
       setError('')
+      return s
     } catch (e) { handleAuthError(e) }
+  }
+
+  function newSession() {
+    if (streaming) return
+    startSession(model)
   }
 
   async function removeSession(sid) {
@@ -213,6 +241,7 @@ export default function Workspace({ auth, onLogout }) {
         <div className="composer">
           <div className="composer-inner">
             <textarea
+              ref={inputRef}
               rows={1} value={input} placeholder={activeId ? 'Message the agent…' : 'Create a session first'}
               disabled={!activeId || streaming}
               onChange={(e) => setInput(e.target.value)} onKeyDown={onKeyDown}
