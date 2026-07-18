@@ -30,10 +30,19 @@ OPENAI_COMPATIBLE = {
 
 def build_provider(config: Config) -> Provider:
     provider = _build_for_model(config, config.model)
-    if config.fallback_model:
-        fallback = _build_for_model(config, config.fallback_model)
-        return FallbackProvider(provider, fallback)
+    # HARNESS_FALLBACK_MODEL may list several models, comma-separated: build a
+    # chain tried left to right (primary -> fb1 -> fb2 -> ...). Folding left
+    # nests one FallbackProvider per level, so each only knows its immediate
+    # next hop -- the orchestrator still sees one plain Provider.
+    for name in _fallback_chain(config.fallback_model):
+        provider = FallbackProvider(provider, _build_for_model(config, name))
     return provider
+
+
+def _fallback_chain(fallback_model: str | None) -> list[str]:
+    if not fallback_model:
+        return []
+    return [name.strip() for name in fallback_model.split(",") if name.strip()]
 
 
 def _build_for_model(config: Config, model: str) -> Provider:
