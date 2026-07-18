@@ -161,6 +161,14 @@ def create_app(config: Config | None = None) -> FastAPI:
     config = config or Config.load()
     state = _State(config)
     app = FastAPI(title="Agentic Harness API", version="1.0")
+    from fastapi.middleware.cors import CORSMiddleware
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     app.state.harness = state
     bearer = HTTPBearer(auto_error=True)
 
