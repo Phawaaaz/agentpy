@@ -110,6 +110,18 @@ def create_app(config: Config | None = None) -> FastAPI:
     # Remember each session's chosen model (demo: in-memory is fine).
     session_models: dict[str, str] = {}
 
+    # Env-aware model dropdown. When a real model is configured via
+    # HARNESS_MODEL and we're NOT in offline mode, offer it and make it the
+    # default -- so the demo talks to that provider using HARNESS_API_KEY /
+    # HARNESS_BASE_URL from the environment. "demo/scripted" always stays in
+    # the list as an on-stage safety switch (deterministic, no network).
+    env_model = os.getenv("HARNESS_MODEL")
+    real_model = env_model if (env_model and not FAKE_ALL) else None
+    models_list = list(DEMO_MODELS)
+    if real_model and real_model not in models_list:
+        models_list.insert(1, real_model)  # after demo/scripted
+    default_model = real_model or "demo/scripted"
+
     # Seed demo accounts.
     for uname, pw in (("alice", "alice123"), ("bob", "bob123")):
         if not users.exists(uname):
@@ -160,7 +172,7 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     @app.get("/models")
     def models(_p: Principal = Depends(principal)):
-        return {"models": DEMO_MODELS, "default": "demo/scripted"}
+        return {"models": models_list, "default": default_model}
 
     # --- sessions ---------------------------------------------------------
 
@@ -338,7 +350,7 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     @app.get("/health")
     def health():
-        return {"status": "ok", "fake": FAKE_ALL, "models": DEMO_MODELS}
+        return {"status": "ok", "fake": FAKE_ALL, "models": models_list, "default": default_model}
 
     return app
 
