@@ -670,3 +670,35 @@ button {
 }
 .new-user-form input:focus, .new-user-form select:focus { border-color: var(--accent); }
 .btn-primary.compact { width: auto; padding: 10px 20px; margin-top: 0; }
+
+/* ---------------- Focus mode (hide steps / thinking) ---------------- */
+
+.focus-toggle {
+  font-size: 13px;
+  font-weight: 600;
+  padding: 7px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.focus-toggle:hover { border-color: var(--accent); color: var(--accent); }
+.focus-toggle.on { color: var(--accent); background: var(--accent-soft); border-color: #e0e3ff; }
+
+/* The one-line replacement for tool cards in focus mode. */
+.steps-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  margin: 4px 0 10px;
+  padding: 8px 14px;
+  font-size: 14px;
+  color: var(--text-muted);
+  background: var(--bg-muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+.steps-line:not([disabled]):hover { border-color: var(--accent); color: var(--accent); cursor: pointer; }
+.steps-line[disabled] { cursor: default; }
+.steps-line .chev { font-size: 11px; }
