@@ -1,7 +1,15 @@
-export default function TopBar({ models, model, onModelChange, disabled, sandboxOn, title }) {
+export default function TopBar({ models, model, onModelChange, disabled, sandboxOn, title,
+                                hideTools, onToggleHideTools }) {
   return (
     <div className="topbar">
       <div className="title">{title}</div>
+
+      <button className={'focus-toggle' + (hideTools ? ' on' : '')}
+              onClick={onToggleHideTools}
+              title={hideTools ? 'Showing a compact "thinking" line — click to show every tool step'
+                               : 'Show each tool step — click to collapse into a thinking line'}>
+        {hideTools ? '👁 Steps hidden' : '🔧 Steps shown'}
+      </button>
 
       <div className={'sandbox-badge ' + (sandboxOn ? 'on' : 'off')}>
         <span className="glyph">{sandboxOn ? '🛡' : '○'}</span>

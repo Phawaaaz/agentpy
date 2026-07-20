@@ -22,7 +22,17 @@ export default function Workspace({ auth, onLogout }) {
   const [streaming, setStreaming] = useState(false)
   const [error, setError] = useState('')
   const [view, setView] = useState('chat')  // 'chat' | 'admin'
+  // Focus mode: collapse tool cards into one "thinking" line. Persisted.
+  const [hideTools, setHideTools] = useState(
+    () => localStorage.getItem('harness_hide_tools') === '1')
   const isAdmin = user.role === 'admin'
+
+  function toggleHideTools() {
+    setHideTools((v) => {
+      localStorage.setItem('harness_hide_tools', v ? '0' : '1')
+      return !v
+    })
+  }
 
   const chatRef = useRef(null)
   const streamRef = useRef(null)
@@ -212,6 +222,7 @@ export default function Workspace({ auth, onLogout }) {
         <TopBar
           models={models} model={model} onModelChange={changeModel}
           disabled={streaming} sandboxOn={true} title={title}
+          hideTools={hideTools} onToggleHideTools={toggleHideTools}
         />
 
         <div className="chat" ref={chatRef}>
@@ -229,7 +240,7 @@ export default function Workspace({ auth, onLogout }) {
               </div>
             ) : (
               messages.map((m, i) => (
-                <Message key={i} msg={m}
+                <Message key={i} msg={m} hideTools={hideTools}
                          streaming={m.role === 'assistant' && m._streaming && streaming} />
               ))
             )}
