@@ -702,3 +702,45 @@ button {
 .steps-line:not([disabled]):hover { border-color: var(--accent); color: var(--accent); cursor: pointer; }
 .steps-line[disabled] { cursor: default; }
 .steps-line .chev { font-size: 11px; }
+
+/* ---------------- File upload ---------------- */
+
+.btn-attach {
+  height: 50px;
+  min-width: 46px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  border-radius: 12px;
+  font-size: 18px;
+  color: var(--text-muted);
+}
+.btn-attach:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.btn-attach:disabled { opacity: 0.5; cursor: default; }
+
+.attach-row {
+  max-width: 820px;
+  margin: 0 auto 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.attach-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid #e0e3ff;
+  border-radius: 999px;
+  padding: 5px 10px;
+}
+.attach-chip.static { color: var(--text-muted); background: var(--bg-muted); border-color: var(--border); }
+.attach-x {
+  border: none; background: none; color: var(--accent);
+  font-size: 15px; line-height: 1; padding: 0 0 0 2px; cursor: pointer;
+}
+.attach-x:hover { color: var(--danger); }
+
+.msg-files { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; }

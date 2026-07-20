@@ -4,7 +4,7 @@ import TopBar from './TopBar.jsx'
 import Message from './Message.jsx'
 import AdminDashboard from './AdminDashboard.jsx'
 import {
-  getModels, listSessions, createSession, deleteSession, getMessages, streamTurn,
+  getModels, listSessions, createSession, deleteSession, getMessages, streamTurn, uploadFiles,
 } from '../api.js'
 
 const LAST_SID_KEY = 'harness_demo_last_sid'
@@ -25,6 +25,8 @@ export default function Workspace({ auth, onLogout }) {
   // Focus mode: collapse tool cards into one "thinking" line. Persisted.
   const [hideTools, setHideTools] = useState(
     () => localStorage.getItem('harness_hide_tools') === '1')
+  const [attached, setAttached] = useState([])  // files uploaded for the next turn
+  const [uploading, setUploading] = useState(false)
   const isAdmin = user.role === 'admin'
 
   function toggleHideTools() {
@@ -37,6 +39,7 @@ export default function Workspace({ auth, onLogout }) {
   const chatRef = useRef(null)
   const streamRef = useRef(null)
   const inputRef = useRef(null)
+  const fileRef = useRef(null)
   const initialized = useRef(false)  // guard: StrictMode mounts effects twice in dev
 
   // Focus the composer whenever a session is ready and we're not streaming,
@@ -139,17 +142,36 @@ export default function Workspace({ auth, onLogout }) {
     setSessions((prev) => prev.map((s) => s.session_id === activeId ? { ...s, model: m } : s))
   }
 
+  // --- file upload into the session workspace ---
+  async function onFilesPicked(e) {
+    const files = Array.from(e.target.files || [])
+    e.target.value = ''  // allow re-picking the same file later
+    if (!files.length || !activeId) return
+    setUploading(true); setError('')
+    try {
+      const res = await uploadFiles(token, activeId, files)
+      setAttached((prev) => [...prev, ...res.files])
+    } catch (err) { handleAuthError(err) }
+    finally { setUploading(false) }
+  }
+
   // --- send a turn and consume the SSE stream ---
   async function send() {
     const text = input.trim()
-    if (!text || streaming || !activeId) return
-    setInput('')
+    if ((!text && attached.length === 0) || streaming || !activeId) return
+    const files = attached
+    // What the user sees, and (with a note about any files) what the agent gets.
+    const shown = text || `I've uploaded ${files.length} file${files.length !== 1 ? 's' : ''}.`
+    const note = files.length
+      ? `\n\n[Files are now in your workspace: ${files.map((f) => f.name).join(', ')}. Read them if relevant to this request.]`
+      : ''
+    setInput(''); setAttached([])
     setError('')
     setStreaming(true)
 
     setMessages((prev) => [
       ...prev,
-      { role: 'user', text, tools: [] },
+      { role: 'user', text: shown, files, tools: [] },
       { role: 'assistant', text: '', model, tools: [], _streaming: true },
     ])
 
@@ -187,7 +209,7 @@ export default function Workspace({ auth, onLogout }) {
       }
     }
 
-    const ctrl = streamTurn(token, activeId, text, model, onEvent)
+    const ctrl = streamTurn(token, activeId, shown + note, model, onEvent)
     streamRef.current = ctrl
     await ctrl.done
     streamRef.current = null
@@ -257,14 +279,32 @@ export default function Workspace({ auth, onLogout }) {
         )}
 
         <div className="composer">
+          {attached.length > 0 && (
+            <div className="attach-row">
+              {attached.map((f, i) => (
+                <span className="attach-chip" key={f.name + i}>
+                  📎 {f.name}
+                  <button className="attach-x" title="Remove"
+                          onClick={() => setAttached((prev) => prev.filter((_, j) => j !== i))}>×</button>
+                </span>
+              ))}
+            </div>
+          )}
           <div className="composer-inner">
+            <input ref={fileRef} type="file" multiple hidden onChange={onFilesPicked} />
+            <button className="btn-attach" title="Upload files or media to this session"
+                    onClick={() => fileRef.current?.click()}
+                    disabled={!activeId || streaming || uploading}>
+              {uploading ? '…' : '📎'}
+            </button>
             <textarea
               ref={inputRef}
               rows={1} value={input} placeholder={activeId ? 'Message the agent…' : 'Create a session first'}
               disabled={!activeId || streaming}
               onChange={(e) => setInput(e.target.value)} onKeyDown={onKeyDown}
             />
-            <button className="btn-send" onClick={send} disabled={!activeId || streaming || !input.trim()}>
+            <button className="btn-send" onClick={send}
+                    disabled={!activeId || streaming || (!input.trim() && attached.length === 0)}>
               {streaming ? '…' : 'Send'}
             </button>
           </div>

@@ -58,6 +58,18 @@ export async function deleteSession(token, sid) {
   }))
 }
 
+// Upload one or more files into the session's workspace. Let the browser set
+// the multipart Content-Type (with its boundary) — don't set it by hand.
+export async function uploadFiles(token, sid, fileList) {
+  const form = new FormData()
+  for (const f of fileList) form.append('files', f)
+  return jsonOrThrow(await fetch(`${BASE}/sessions/${sid}/files`, {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: form,
+  }))
+}
+
 export async function getMessages(token, sid) {
   return jsonOrThrow(await fetch(`${BASE}/sessions/${sid}/messages`, {
     headers: authHeaders(token),
