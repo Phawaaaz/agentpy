@@ -70,6 +70,30 @@ export async function uploadFiles(token, sid, fileList) {
   }))
 }
 
+// List the files in a session's workspace (uploaded + agent-created).
+export async function listFiles(token, sid) {
+  return jsonOrThrow(await fetch(`${BASE}/sessions/${sid}/files`, { headers: authHeaders(token) }))
+}
+
+// Fetch a workspace file (with auth) and trigger a browser download.
+export async function downloadFile(token, sid, name) {
+  const res = await fetch(`${BASE}/sessions/${sid}/files/${encodeURIComponent(name)}`, {
+    headers: authHeaders(token),
+  })
+  if (!res.ok) throw new Error('download failed')
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url; a.download = name
+  document.body.appendChild(a); a.click(); a.remove()
+  URL.revokeObjectURL(url)
+}
+
+// Ask the server to stop the session's currently running turn.
+export async function cancelTurn(token, sid) {
+  await fetch(`${BASE}/sessions/${sid}/cancel`, { method: 'POST', headers: authHeaders(token) })
+}
+
 export async function getMessages(token, sid) {
   return jsonOrThrow(await fetch(`${BASE}/sessions/${sid}/messages`, {
     headers: authHeaders(token),

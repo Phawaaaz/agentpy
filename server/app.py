@@ -19,7 +19,7 @@ from datetime import datetime
 
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
@@ -64,6 +64,10 @@ FAKE_ALL = os.getenv("HARNESS_DEMO_FAKE") in ("1", "true", "yes")
 _TOOL_CAP = 2000
 _MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB per file
 _UNSAFE_NAME = re.compile(r"[^A-Za-z0-9._ -]")
+
+
+class _Cancelled(Exception):
+    """Raised inside the agent loop (via on_event) to stop a turn on request."""
 
 
 def _safe_filename(name: str) -> str:
@@ -121,6 +125,8 @@ def create_app(config: Config | None = None) -> FastAPI:
     jwt_secret = load_or_create_secret(config.jwt_secret_path)
     # Remember each session's chosen model (demo: in-memory is fine).
     session_models: dict[str, str] = {}
+    # (user_id, sid) pairs whose current turn has been asked to stop.
+    cancel_flags: set = set()
 
     # Env-aware model dropdown. When a real model is configured via
     # HARNESS_MODEL and we're NOT in offline mode, offer it and make it the
@@ -251,6 +257,15 @@ def create_app(config: Config | None = None) -> FastAPI:
                     out.append({"name": n, "size": os.path.getsize(fp)})
         return {"session_id": sid, "files": out}
 
+    @app.get("/sessions/{sid}/files/{name}")
+    def download_file(sid: str, name: str, p: Principal = Depends(principal)):
+        _own_session_or_404(sid, p.user_id)
+        safe = _safe_filename(name)  # strip any path -> stays inside the workspace
+        path = os.path.join(_session_workspace(_username(p.user_id), sid), safe)
+        if not os.path.isfile(path):
+            raise HTTPException(404, "no such file")
+        return FileResponse(path, filename=safe)
+
     @app.get("/sessions/{sid}/messages")
     def history(sid: str, p: Principal = Depends(principal)):
         store = DbSessionStore(db_engine, p.user_id)
@@ -289,6 +304,10 @@ def create_app(config: Config | None = None) -> FastAPI:
             loop.call_soon_threadsafe(q.put_nowait, (event, data))
 
         def on_event(kind, *details):
+            # Cooperative stop: if a /cancel came in, bail out at the next
+            # event boundary (token or tool step) instead of running to the end.
+            if (p.user_id, sid) in cancel_flags:
+                raise _Cancelled()
             if kind == "token":
                 emit("token", {"delta": details[0]})
             elif kind == "tool_call":
@@ -305,6 +324,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                                             "output": "Action denied by policy.", "blocked": True, "error": False})
 
         def work():
+            cancel_flags.discard((p.user_id, sid))  # clear any stale request
             try:
                 user_config = config.for_user(username)
                 # Per-request isolation roots (own thread context -> no leakage).
@@ -333,9 +353,14 @@ def create_app(config: Config | None = None) -> FastAPI:
                 answer = agent.run(body.message)
                 store.save(sid, conv)
                 emit("assistant_message", {"text": answer, "model": model})
+            except _Cancelled:
+                # Stopped by the user: end the stream cleanly, discard the
+                # partial turn (don't save), don't surface it as an error.
+                emit("stopped", {})
             except Exception as exc:  # surface to the UI, don't crash the stream
                 emit("error", {"message": str(exc)})
             finally:
+                cancel_flags.discard((p.user_id, sid))
                 loop.call_soon_threadsafe(q.put_nowait, DONE)
 
         threading.Thread(target=work, daemon=True).start()
@@ -352,6 +377,11 @@ def create_app(config: Config | None = None) -> FastAPI:
 
         return StreamingResponse(sse(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    @app.post("/sessions/{sid}/cancel", status_code=204)
+    def cancel_turn(sid: str, p: Principal = Depends(principal)):
+        # Flag the running turn to stop at its next step (see on_event).
+        cancel_flags.add((p.user_id, sid))
 
     # --- admin (role=admin only) -----------------------------------------
 
