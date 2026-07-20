@@ -92,6 +92,9 @@ class Config:
     # use a sibling model or a key-less local one). Unset = no fallback.
     fallback_model: str | None = None
     permission_mode: str = "ask"  # ask | allowlist | auto
+    # CLI: hide tool-result output (e.g. long file listings). Errors still
+    # show. Toggle at runtime with /quiet. Default off = full detail.
+    quiet: bool = False
     max_steps: int = 25
     # None = use the active model's known limit (providers/model_info.py),
     # falling back to the historical 4096 default for unknown models.
@@ -209,6 +212,7 @@ class Config:
             base_url=get_val("HARNESS_BASE_URL", "base_url", cls.base_url) or None,
             fallback_model=get_val("HARNESS_FALLBACK_MODEL", "fallback_model", cls.fallback_model) or None,
             permission_mode=get_val("HARNESS_PERMISSION_MODE", "permission_mode", cls.permission_mode),
+            quiet=get_val("HARNESS_QUIET", "quiet", cls.quiet, to_bool),
             max_steps=get_val("HARNESS_MAX_STEPS", "max_steps", cls.max_steps, int),
             max_tokens=get_val("HARNESS_MAX_TOKENS", "max_tokens", cls.max_tokens, int),
             max_context_tokens=get_val("HARNESS_MAX_CONTEXT_TOKENS", "max_context_tokens", cls.max_context_tokens, int),

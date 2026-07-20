@@ -57,6 +57,7 @@ HELP = """commands:
   /sessions            list saved sessions
   /cost                show token usage and estimated cost
   /memory              show what the harness has been working on
+  /quiet               toggle hiding tool output (e.g. file listings)
   /model               show the current model
   /model <name>        switch model mid-session (conversation history kept)
   /whoami              show the logged-in user and role
@@ -111,12 +112,16 @@ def _make_approver():
     return approve
 
 
-def _make_event_handler(*listeners):
+def _make_event_handler(*listeners, quiet=None):
     """Fan `on_event` out to any number of independent listeners plus the
     CLI's own printing. Each listener is a plain object with a
     `log(kind, *details)` method (EventLogger, MemoryTracker, ...) -- adding
     or removing one is a one-line change here, not a signature change, and
-    none of them depend on each other or on this function existing."""
+    none of them depend on each other or on this function existing.
+
+    `quiet` is an optional mutable {"on": bool} -- when on, tool-result output
+    (e.g. long file listings) is hidden; errors still show. Toggled live by
+    /quiet."""
 
     def on_event(kind: str, *details) -> None:
         for listener in listeners:
@@ -128,6 +133,10 @@ def _make_event_handler(*listeners):
             print(f"\n\U0001f527 {name}({_format_args(arguments)})")
         elif kind == "tool_result":
             _name, result, *_timing = details  # trailing duration_ms (I1)
+            # Quiet mode hides tool output (still show errors so failures and
+            # the workspace block stay visible).
+            if quiet and quiet.get("on") and not result.startswith("Error"):
+                return
             preview = result if len(result) <= 300 else result[:300] + " ..."
             indented = "\n".join("     " + line for line in preview.splitlines())
             print(indented or "     (no output)")
@@ -400,6 +409,7 @@ def _handle_command(
     skills: dict,
     user_store: DbUserStore | None = None,
     db_engine=None,
+    quiet=None,
 ) -> bool:
     """Handle a /command. Returns True if input was a command (handled)."""
     if not text.startswith("/"):
@@ -447,6 +457,11 @@ def _handle_command(
         print(memory_tracker.summary())
     elif cmd == "/model":
         _handle_model_command(args, session)
+    elif cmd == "/quiet":
+        if quiet is not None:
+            quiet["on"] = not quiet["on"]
+            print("quiet mode ON — tool output hidden" if quiet["on"]
+                  else "quiet mode OFF — tool output shown")
     elif cmd == "/whoami":
         who = session.username or "(not logged in)"
         print(f"{who} ({session.role})" if session.role else who)
@@ -571,7 +586,8 @@ def main() -> None:
     memory_tracker = MemoryTracker(config.memory_dir, run_id)
     context_engine.memory_tool.set_memory_root(config.memory_dir)
     engine.builtin.offload.set_offload_root(config.offload_dir)
-    on_event = _make_event_handler(logger, memory_tracker)
+    quiet = {"on": config.quiet}  # mutable so /quiet can toggle it live
+    on_event = _make_event_handler(logger, memory_tracker, quiet=quiet)
 
     # Skills are opt-in too: no .harness/skills.json means just the four
     # built-ins. A name collision with a built-in still works (external
@@ -643,6 +659,7 @@ def main() -> None:
             if _handle_command(
                 user_input, session, store, mcp_manager, memory_tracker,
                 roles, skills, user_store=user_store, db_engine=db_engine,
+                quiet=quiet,
             ):
                 continue
 
