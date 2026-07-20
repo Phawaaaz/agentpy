@@ -10,6 +10,11 @@ export default function Message({ msg, streaming }) {
       <div className="msg">
         <div className="msg-role">You</div>
         <div className="bubble-user">{msg.text}</div>
+        {msg.files && msg.files.length > 0 && (
+          <div className="msg-files">
+            {msg.files.map((f, i) => <span className="attach-chip static" key={i}>📎 {f.name}</span>)}
+          </div>
+        )}
       </div>
     )
   }

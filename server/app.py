@@ -12,11 +12,12 @@ import asyncio
 import json
 import os
 import queue
+import re
 import threading
 from dataclasses import dataclass, replace
 from datetime import datetime
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -61,6 +62,17 @@ DEMO_MODELS = [
 FAKE_ALL = os.getenv("HARNESS_DEMO_FAKE") in ("1", "true", "yes")
 
 _TOOL_CAP = 2000
+_MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB per file
+_UNSAFE_NAME = re.compile(r"[^A-Za-z0-9._ -]")
+
+
+def _safe_filename(name: str) -> str:
+    """Strip any path and confine to a safe charset, so an upload can only
+    land as a plain file inside the session workspace (no traversal)."""
+    base = os.path.basename(name or "").strip()
+    base = _UNSAFE_NAME.sub("_", base)
+    base = base.lstrip(".") or "upload"  # no hidden or ".."-style names
+    return base[:120]
 
 
 class Login(BaseModel):
@@ -197,6 +209,47 @@ def create_app(config: Config | None = None) -> FastAPI:
         if not store.delete(sid):
             raise HTTPException(404, "no such session")
         session_models.pop(sid, None)
+
+    # --- files: upload into (and list) the session's own workspace ---------
+
+    def _session_workspace(username: str, sid: str) -> str:
+        # Same per-user, per-session directory the agent's tools are confined
+        # to (see the streamed turn), so an upload here is immediately
+        # readable by read_file / list_dir and nothing else can reach it.
+        return os.path.join(config.for_user(username).workspace_dir, sid)
+
+    def _own_session_or_404(sid: str, user_id: int) -> None:
+        if sid not in DbSessionStore(db_engine, user_id).list_ids():
+            raise HTTPException(404, "no such session")
+
+    @app.post("/sessions/{sid}/files")
+    async def upload_files(sid: str, p: Principal = Depends(principal),
+                           files: list[UploadFile] = File(...)):
+        _own_session_or_404(sid, p.user_id)
+        wsdir = _session_workspace(_username(p.user_id), sid)
+        os.makedirs(wsdir, exist_ok=True)
+        saved = []
+        for uf in files:
+            data = await uf.read()
+            if len(data) > _MAX_UPLOAD_BYTES:
+                raise HTTPException(413, f"{uf.filename}: too large (max 25 MB)")
+            name = _safe_filename(uf.filename)
+            with open(os.path.join(wsdir, name), "wb") as f:
+                f.write(data)
+            saved.append({"name": name, "size": len(data)})
+        return {"session_id": sid, "files": saved}
+
+    @app.get("/sessions/{sid}/files")
+    def list_files(sid: str, p: Principal = Depends(principal)):
+        _own_session_or_404(sid, p.user_id)
+        wsdir = _session_workspace(_username(p.user_id), sid)
+        out = []
+        if os.path.isdir(wsdir):
+            for n in sorted(os.listdir(wsdir)):
+                fp = os.path.join(wsdir, n)
+                if os.path.isfile(fp):
+                    out.append({"name": n, "size": os.path.getsize(fp)})
+        return {"session_id": sid, "files": out}
 
     @app.get("/sessions/{sid}/messages")
     def history(sid: str, p: Principal = Depends(principal)):
