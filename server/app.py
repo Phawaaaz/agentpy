@@ -10,11 +10,15 @@ Run:  python -m server.app     (or via ./demo.sh)
 
 import asyncio
 import base64
+import io
 import json
 import os
 import queue
 import re
+import shutil
+import tempfile
 import threading
+import zipfile
 from dataclasses import dataclass, replace
 from datetime import datetime
 
@@ -25,6 +29,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
 import context_engine.memory_tool
+import engine.builtin.agent_skills  # noqa: F401  (register use_skill tool)
 import engine.builtin.filesystem  # noqa: F401  (register tools)
 import engine.builtin.git_tool  # noqa: F401
 import engine.builtin.offload
@@ -159,6 +164,51 @@ def _mcp_row_public(row: "MCPServer") -> dict:
         "command": row.command, "args": json.loads(row.args_json or "[]"),
         "url": row.url, "risk": row.risk,
     }
+
+
+def _install_skill_zip(skills_root: str, data: bytes) -> dict:
+    """Install an uploaded skill .zip into `{skills_root}/{name}/`.
+
+    The archive must contain a SKILL.md (at its root or inside one top-level
+    folder). Zip members are validated against path traversal. The skill name
+    comes from SKILL.md frontmatter, else the wrapping folder name. Returns
+    {name, description}. Raises HTTPException(400) on a bad archive.
+    """
+    from engine.builtin.agent_skills import _safe_name, skill_meta
+
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(data))
+    except zipfile.BadZipFile:
+        raise HTTPException(400, "not a valid .zip file")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        for member in zf.namelist():
+            # Reject absolute paths and any ".." traversal before extracting.
+            norm = os.path.normpath(member)
+            if norm.startswith(("/", "..")) or os.path.isabs(member):
+                raise HTTPException(400, f"unsafe path in archive: {member}")
+        zf.extractall(tmp)
+
+        # Locate the SKILL.md (root, or one level down).
+        md_dir = None
+        for root, _dirs, filenames in os.walk(tmp):
+            if "SKILL.md" in filenames:
+                md_dir = root
+                break
+        if md_dir is None:
+            raise HTTPException(400, "archive has no SKILL.md")
+
+        meta = skill_meta(md_dir, os.path.basename(md_dir.rstrip("/")) or "skill")
+        name = _safe_name(meta["name"])
+        if not name:
+            raise HTTPException(400, "could not determine a valid skill name")
+
+        os.makedirs(skills_root, exist_ok=True)
+        dest = os.path.join(skills_root, name)
+        if os.path.exists(dest):
+            shutil.rmtree(dest)  # reinstall replaces the old copy
+        shutil.copytree(md_dir, dest)
+        return {"name": name, "description": meta["description"]}
 
 
 class Login(BaseModel):
@@ -351,6 +401,33 @@ def create_app(config: Config | None = None) -> FastAPI:
         with OrmSession(db_engine) as db:
             db.execute(sa_delete(Skill).where(Skill.name == name))
             db.commit()
+
+    # --- agent skills: installed SKILL.md folders the agent can run --------
+    #     (per-user; distinct from the admin prompt-preset "skills" above)
+
+    def _user_skills_dir(user_id: int) -> str:
+        return config.for_user(_username(user_id)).skills_dir
+
+    @app.get("/skills/installed")
+    def list_installed(p: Principal = Depends(principal)):
+        from engine.builtin.agent_skills import list_installed_skills
+        return {"skills": list_installed_skills(_user_skills_dir(p.user_id))}
+
+    @app.post("/skills/install", status_code=201)
+    async def install_skill(p: Principal = Depends(principal),
+                            file: UploadFile = File(...)):
+        data = await file.read()
+        if len(data) > _MAX_UPLOAD_BYTES:
+            raise HTTPException(413, "skill archive too large (max 25 MB)")
+        return _install_skill_zip(_user_skills_dir(p.user_id), data)
+
+    @app.delete("/skills/installed/{name}", status_code=204)
+    def uninstall_skill(name: str, p: Principal = Depends(principal)):
+        from engine.builtin.agent_skills import _safe_name
+        safe = _safe_name(name)
+        dest = os.path.join(_user_skills_dir(p.user_id), safe)
+        if safe and os.path.isdir(dest):
+            shutil.rmtree(dest)
 
     # --- MCP tool servers (admin-configured, org-wide) --------------------
 
@@ -553,9 +630,14 @@ def create_app(config: Config | None = None) -> FastAPI:
                 context_engine.memory_tool.set_memory_root(user_config.memory_dir)
                 engine.builtin.offload.set_offload_root(user_config.offload_dir)
                 engine.workspace.set_workspace_root(f"{user_config.workspace_dir}/{sid}")
+                engine.builtin.agent_skills.set_skills_root(user_config.skills_dir)
                 provider = _provider_for(model)
+                # Progressive disclosure: tell the model which skills are
+                # installed so it can call use_skill(name) when relevant.
+                system_prompt = (user_config.system_prompt
+                                 + engine.builtin.agent_skills.skills_catalog_text(user_config.skills_dir))
                 conv = Conversation(
-                    user_config.system_prompt,
+                    system_prompt,
                     max_context_tokens=effective_context_budget(model, user_config.max_context_tokens),
                     keep_recent_messages=user_config.keep_recent_messages,
                     summarizer=make_provider_summarizer(provider),

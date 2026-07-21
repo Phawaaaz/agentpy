@@ -142,6 +142,9 @@ class Config:
     confine_workspace: bool = False
     # Root under which per-user, per-session workspaces are created.
     workspace_dir: str = "workspaces"
+    # Root under which a user's installed agent-skills live (Claude-Code-style
+    # SKILL.md folders the agent can discover, read, and run). Per-user.
+    skills_dir: str = ".harness/skills"
     # Sandbox (D33): "off" = run_command runs on the host (default); "docker"
     # = run each session's commands inside a resource-limited, network-denied
     # container mounting only that session's workspace. "docker" implies
@@ -174,6 +177,7 @@ class Config:
             logs_dir=os.path.join(self.logs_dir, username),
             offload_dir=os.path.join(self.offload_dir, username),
             workspace_dir=os.path.join(self.workspace_dir, username),
+            skills_dir=os.path.join(self.skills_dir, username),
         )
 
     @classmethod
@@ -236,6 +240,7 @@ class Config:
             search_api_key=get_val("HARNESS_SEARCH_API_KEY", "search_api_key", cls.search_api_key) or None,
             confine_workspace=get_val("HARNESS_CONFINE_WORKSPACE", "confine_workspace", cls.confine_workspace, to_bool),
             workspace_dir=get_val("HARNESS_WORKSPACE_DIR", "workspace_dir", cls.workspace_dir),
+            skills_dir=get_val("HARNESS_SKILLS_DIR", "skills_dir", cls.skills_dir),
             sandbox=get_val("HARNESS_SANDBOX", "sandbox", cls.sandbox),
             sandbox_image=get_val("HARNESS_SANDBOX_IMAGE", "sandbox_image", cls.sandbox_image),
             sandbox_memory=get_val("HARNESS_SANDBOX_MEMORY", "sandbox_memory", cls.sandbox_memory),

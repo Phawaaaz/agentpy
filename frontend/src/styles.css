@@ -809,6 +809,15 @@ button {
 .file-row:hover { background: var(--accent-soft); }
 .file-row .fname { font-size: 14px; font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-row .fsize { font-size: 12px; color: var(--accent); white-space: nowrap; font-weight: 600; }
+/* installed-skill rows are static (not a download button) with an uninstall × */
+.file-row.static { cursor: default; }
+.file-row.static:hover { background: transparent; }
+.file-row.static .fname { font-family: var(--font); }
+.file-row.static .sdel {
+  border: none; background: none; color: var(--text-muted);
+  font-size: 17px; line-height: 1; padding: 0 4px; cursor: pointer;
+}
+.file-row.static .sdel:hover { color: var(--danger); }
 
 /* quiet per-message token/cost readout */
 .usage-line {
