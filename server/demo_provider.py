@@ -100,9 +100,9 @@ class DemoProvider(Provider):
 
         # Plain chat (no tools) -- still streams, still shows the model chip.
         return self._final(
-            tag + "Hi! I'm the harness agent. Ask me to create a file and show its "
+            tag + "Hi! I'm Floowpay AI. Ask me to create a file and show its "
             "contents, run a sandboxed command, or try reading /etc/passwd to see the "
-            "sandbox block it. Switch my model from the dropdown any time."
+            "sandbox block it. Switch my model from the composer any time."
         )
 
     # --- Provider API ------------------------------------------------------

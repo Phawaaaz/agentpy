@@ -311,6 +311,7 @@ button {
 }
 .empty-chat h2 { font-size: 22px; color: var(--text); font-weight: 600; margin-bottom: 10px; }
 .empty-chat p { font-size: 16px; margin: 4px 0; }
+.empty-chat .empty-hint { font-size: 13px; margin-top: 14px; color: var(--text-muted); }
 .empty-chat code {
   font-family: var(--mono);
   background: var(--bg-muted);

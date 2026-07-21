@@ -322,7 +322,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         for _row in _db.execute(_sa_select(MCPServer)).scalars().all():
             _connect_mcp(_mcp_config_from_row(_row))
 
-    app = FastAPI(title="Agent Harness — Demo API")
+    app = FastAPI(title="Floowpay AI API")
     app.add_middleware(
         CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
         allow_headers=["*"], allow_credentials=False,
