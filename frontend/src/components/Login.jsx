@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { login } from '../api.js'
+import logo from '../assets/image/logo-lg.png'
 
 export default function Login({ onLogin }) {
   const [username, setUsername] = useState('')
@@ -24,8 +25,8 @@ export default function Login({ onLogin }) {
   return (
     <div className="login-screen">
       <form className="login-card" onSubmit={submit}>
-        <h1>Agent Harness</h1>
-        <p className="sub">Sign in to your workspace</p>
+        <img className="login-logo" src={logo} alt="Floowpay" />
+        <p className="sub">Sign in to your AI workspace</p>
 
         {error && <div className="login-error">{error}</div>}
 
