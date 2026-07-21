@@ -216,6 +216,8 @@ export default function Workspace({ auth, onLogout }) {
         }))
       } else if (ev === 'assistant_message') {
         patchAssistant((a) => ({ ...a, text: data.text, model: data.model || a.model }))
+      } else if (ev === 'usage') {
+        patchAssistant((a) => ({ ...a, usage: data }))
       } else if (ev === 'error') {
         setError(data.message === 'connection lost'
           ? 'Connection lost — the stream was interrupted. Retry your message.'
