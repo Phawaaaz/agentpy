@@ -59,6 +59,13 @@ export default function Message({ msg, streaming, hideTools }) {
           {streaming && <span className="cursor" />}
         </div>
       )}
+
+      {msg.usage && msg.usage.total_tokens > 0 && (
+        <div className="usage-line">
+          {msg.usage.total_tokens.toLocaleString()} tokens
+          {msg.usage.cost_usd > 0 && <> · ${msg.usage.cost_usd.toFixed(4)}</>}
+        </div>
+      )}
     </div>
   )
 }

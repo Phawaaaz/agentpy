@@ -792,3 +792,11 @@ button {
 .file-row:hover { background: var(--accent-soft); }
 .file-row .fname { font-size: 14px; font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-row .fsize { font-size: 12px; color: var(--accent); white-space: nowrap; font-weight: 600; }
+
+/* quiet per-message token/cost readout */
+.usage-line {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}

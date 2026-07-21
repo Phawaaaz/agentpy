@@ -353,6 +353,13 @@ def create_app(config: Config | None = None) -> FastAPI:
                 answer = agent.run(body.message)
                 store.save(sid, conv)
                 emit("assistant_message", {"text": answer, "model": model})
+                emit("usage", {
+                    "prompt_tokens": usage.prompt_tokens,
+                    "completion_tokens": usage.completion_tokens,
+                    "total_tokens": usage.prompt_tokens + usage.completion_tokens,
+                    "cost_usd": round(usage.cost_usd, 6),
+                    "calls": usage.calls,
+                })
             except _Cancelled:
                 # Stopped by the user: end the stream cleanly, discard the
                 # partial turn (don't save), don't surface it as an error.
