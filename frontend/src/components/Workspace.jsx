@@ -33,6 +33,8 @@ export default function Workspace({ auth, onLogout }) {
   const [filesOpen, setFilesOpen] = useState(false)
   const [skills, setSkills] = useState([])      // admin-defined prompt presets
   const [skillsOpen, setSkillsOpen] = useState(false)
+  const [menuIndex, setMenuIndex] = useState(0)     // keyboard selection in the slash/✨ menu
+  const [slashDismissed, setSlashDismissed] = useState(false)  // Esc closes the "/" menu
   const isAdmin = user.role === 'admin'
 
   async function refreshSkills() {
@@ -252,7 +254,39 @@ export default function Workspace({ auth, onLogout }) {
     if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight
   }, [messages, streaming])
 
+  // --- slash-command menu: typing "/" (optionally + a query, no spaces) at
+  //     the start of an empty composer suggests skills to insert. The ✨
+  //     button opens the same menu unfiltered. ---
+  const slashMatch = /^\/(\S*)$/.exec(input)
+  const slashActive = !slashDismissed && slashMatch !== null
+  const slashQuery = slashActive ? slashMatch[1].toLowerCase() : ''
+  const menuSkills = slashActive
+    ? skills.filter((s) => s.name.toLowerCase().includes(slashQuery) ||
+                           (s.description || '').toLowerCase().includes(slashQuery))
+    : (skillsOpen ? skills : [])
+  const menuOpen = menuSkills.length > 0 && (slashActive || skillsOpen)
+
+  function pickSkill(s) {
+    setInput(s.template)
+    setSkillsOpen(false)
+    setSlashDismissed(true)  // don't reopen for the inserted text
+    setMenuIndex(0)
+    inputRef.current?.focus()
+  }
+
+  function onInputChange(e) {
+    setInput(e.target.value)
+    setMenuIndex(0)
+    if (slashDismissed) setSlashDismissed(false)  // let a fresh "/" reopen it
+  }
+
   function onKeyDown(e) {
+    if (menuOpen) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); setMenuIndex((i) => (i + 1) % menuSkills.length); return }
+      if (e.key === 'ArrowUp') { e.preventDefault(); setMenuIndex((i) => (i - 1 + menuSkills.length) % menuSkills.length); return }
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); pickSkill(menuSkills[Math.min(menuIndex, menuSkills.length - 1)]); return }
+      if (e.key === 'Escape') { e.preventDefault(); setSkillsOpen(false); setSlashDismissed(true); return }
+    }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
   }
 
@@ -343,12 +377,15 @@ export default function Workspace({ auth, onLogout }) {
               ))}
             </div>
           )}
-          {skillsOpen && skills.length > 0 && (
+          {menuOpen && (
             <div className="skills-menu">
-              {skills.map((s) => (
-                <button className="skill-item" key={s.name}
-                        onClick={() => { setInput(s.template); setSkillsOpen(false); inputRef.current?.focus() }}>
-                  <span className="skill-name">{s.name}</span>
+              {slashActive && <div className="skills-menu-hint">Skills — ↑↓ to move, ↵ to insert, esc to dismiss</div>}
+              {menuSkills.map((s, i) => (
+                <button className={'skill-item' + (i === Math.min(menuIndex, menuSkills.length - 1) ? ' active' : '')}
+                        key={s.name}
+                        onMouseEnter={() => setMenuIndex(i)}
+                        onClick={() => pickSkill(s)}>
+                  <span className="skill-name">/{s.name}</span>
                   {s.description && <span className="skill-desc">{s.description}</span>}
                 </button>
               ))}
@@ -369,9 +406,10 @@ export default function Workspace({ auth, onLogout }) {
             )}
             <textarea
               ref={inputRef}
-              rows={1} value={input} placeholder={activeId ? 'Message the agent…' : 'Create a session first'}
+              rows={1} value={input}
+              placeholder={activeId ? 'Message the agent…  (press / for skills)' : 'Create a session first'}
               disabled={!activeId || streaming}
-              onChange={(e) => setInput(e.target.value)} onKeyDown={onKeyDown}
+              onChange={onInputChange} onKeyDown={onKeyDown}
             />
             {streaming ? (
               <button className="btn-stop" onClick={stopTurn} title="Stop the agent">

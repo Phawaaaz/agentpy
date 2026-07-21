@@ -846,7 +846,14 @@ button {
   border-radius: 8px;
   cursor: pointer;
 }
-.skill-item:hover { background: var(--accent-soft); }
+.skill-item:hover, .skill-item.active { background: var(--accent-soft); }
+.skills-menu-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 4px 12px 6px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 2px;
+}
 .skill-name { font-size: 14px; font-weight: 600; color: var(--text); }
 .skill-desc { font-size: 12px; color: var(--text-muted); }
 
