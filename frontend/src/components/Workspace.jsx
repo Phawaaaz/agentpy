@@ -5,6 +5,7 @@ import Message from './Message.jsx'
 import AdminDashboard from './AdminDashboard.jsx'
 import {
   getModels, listSessions, createSession, deleteSession, getMessages, streamTurn, uploadFiles,
+  listFiles, downloadFile, cancelTurn,
 } from '../api.js'
 
 const LAST_SID_KEY = 'harness_demo_last_sid'
@@ -27,7 +28,19 @@ export default function Workspace({ auth, onLogout }) {
     () => localStorage.getItem('harness_hide_tools') === '1')
   const [attached, setAttached] = useState([])  // files uploaded for the next turn
   const [uploading, setUploading] = useState(false)
+  const [files, setFiles] = useState([])        // workspace files (for download)
+  const [filesOpen, setFilesOpen] = useState(false)
   const isAdmin = user.role === 'admin'
+
+  async function refreshFiles(sid = activeId) {
+    if (!sid) return
+    try { setFiles((await listFiles(token, sid)).files) } catch { /* ignore */ }
+  }
+
+  function stopTurn() {
+    streamRef.current?.abort()          // stop consuming the stream immediately
+    if (activeId) cancelTurn(token, activeId).catch(() => {})  // stop the agent server-side
+  }
 
   function toggleHideTools() {
     setHideTools((v) => {
@@ -104,6 +117,7 @@ export default function Workspace({ auth, onLogout }) {
       setMessages(data.messages.map((m) => ({
         role: m.role, text: m.text, model: m.model, tools: [],
       })))
+      refreshFiles(sid)
     } catch (e) { handleAuthError(e) }
   }
 
@@ -215,6 +229,7 @@ export default function Workspace({ auth, onLogout }) {
     streamRef.current = null
     setStreaming(false)
     patchAssistant((a) => { const { _streaming, ...rest } = a; return rest })
+    refreshFiles()  // the agent may have created files this turn
   }
 
   // auto-scroll to the newest content
@@ -245,7 +260,30 @@ export default function Workspace({ auth, onLogout }) {
           models={models} model={model} onModelChange={changeModel}
           disabled={streaming} sandboxOn={true} title={title}
           hideTools={hideTools} onToggleHideTools={toggleHideTools}
+          fileCount={files.length}
+          filesOpen={filesOpen}
+          onToggleFiles={() => { const n = !filesOpen; setFilesOpen(n); if (n) refreshFiles() }}
         />
+
+        {filesOpen && (
+          <div className="files-panel">
+            <div className="files-head">
+              <span>Workspace files</span>
+              <button className="btn-ghost sm" onClick={() => refreshFiles()}>↻</button>
+            </div>
+            {files.length === 0 ? (
+              <div className="files-empty">No files yet. Upload one, or ask the agent to create one.</div>
+            ) : (
+              files.map((f) => (
+                <button className="file-row" key={f.name} onClick={() => downloadFile(token, activeId, f.name)}
+                        title="Download">
+                  <span className="fname">{f.name}</span>
+                  <span className="fsize">{fmtSize(f.size)} ↓</span>
+                </button>
+              ))
+            )}
+          </div>
+        )}
 
         <div className="chat" ref={chatRef}>
           <div className="chat-inner">
@@ -303,14 +341,26 @@ export default function Workspace({ auth, onLogout }) {
               disabled={!activeId || streaming}
               onChange={(e) => setInput(e.target.value)} onKeyDown={onKeyDown}
             />
-            <button className="btn-send" onClick={send}
-                    disabled={!activeId || streaming || (!input.trim() && attached.length === 0)}>
-              {streaming ? '…' : 'Send'}
-            </button>
+            {streaming ? (
+              <button className="btn-stop" onClick={stopTurn} title="Stop the agent">
+                ■ Stop
+              </button>
+            ) : (
+              <button className="btn-send" onClick={send}
+                      disabled={!activeId || (!input.trim() && attached.length === 0)}>
+                Send
+              </button>
+            )}
           </div>
         </div>
       </div>
       )}
     </div>
   )
+}
+
+function fmtSize(n) {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`
 }

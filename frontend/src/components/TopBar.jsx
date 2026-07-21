@@ -1,8 +1,14 @@
 export default function TopBar({ models, model, onModelChange, disabled, sandboxOn, title,
-                                hideTools, onToggleHideTools }) {
+                                hideTools, onToggleHideTools,
+                                fileCount, filesOpen, onToggleFiles }) {
   return (
     <div className="topbar">
       <div className="title">{title}</div>
+
+      <button className={'focus-toggle' + (filesOpen ? ' on' : '')} onClick={onToggleFiles}
+              title="Files in this session's workspace">
+        📁 Files{fileCount ? ` (${fileCount})` : ''}
+      </button>
 
       <button className={'focus-toggle' + (hideTools ? ' on' : '')}
               onClick={onToggleHideTools}
