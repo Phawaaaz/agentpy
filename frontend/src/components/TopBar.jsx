@@ -1,9 +1,15 @@
 export default function TopBar({ models, model, onModelChange, disabled, sandboxOn, title,
                                 hideTools, onToggleHideTools,
-                                fileCount, filesOpen, onToggleFiles }) {
+                                fileCount, filesOpen, onToggleFiles,
+                                skillCount, skillsOpen, onToggleSkills }) {
   return (
     <div className="topbar">
       <div className="title">{title}</div>
+
+      <button className={'focus-toggle' + (skillsOpen ? ' on' : '')} onClick={onToggleSkills}
+              title="Install and manage agent skills (SKILL.md folders the agent can run)">
+        🧩 Skills{skillCount ? ` (${skillCount})` : ''}
+      </button>
 
       <button className={'focus-toggle' + (filesOpen ? ' on' : '')} onClick={onToggleFiles}
               title="Files in this session's workspace">

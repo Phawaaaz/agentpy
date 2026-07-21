@@ -6,6 +6,7 @@ import AdminDashboard from './AdminDashboard.jsx'
 import {
   getModels, listSessions, createSession, deleteSession, getMessages, streamTurn, uploadFiles,
   listFiles, downloadFile, cancelTurn, getSkills,
+  getInstalledSkills, installSkill, uninstallSkill,
 } from '../api.js'
 
 const LAST_SID_KEY = 'harness_demo_last_sid'
@@ -33,14 +34,39 @@ export default function Workspace({ auth, onLogout }) {
   const [filesOpen, setFilesOpen] = useState(false)
   const [skills, setSkills] = useState([])      // admin-defined prompt presets
   const [skillsOpen, setSkillsOpen] = useState(false)
+  const [installed, setInstalled] = useState([])  // agent skills (SKILL.md folders)
+  const [installedOpen, setInstalledOpen] = useState(false)
+  const [installing, setInstalling] = useState(false)
   const isAdmin = user.role === 'admin'
 
   async function refreshSkills() {
     try { setSkills(await getSkills(token)) } catch { /* ignore */ }
   }
+
+  async function refreshInstalled() {
+    try { setInstalled((await getInstalledSkills(token)).skills) } catch { /* ignore */ }
+  }
+
+  async function onSkillPicked(e) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setInstalling(true); setError('')
+    try {
+      await installSkill(token, file)
+      await refreshInstalled()
+    } catch (err) { setError(err.message || 'Could not install skill') }
+    finally { setInstalling(false) }
+  }
+
+  async function removeInstalled(name) {
+    if (!confirm(`Uninstall skill "${name}"?`)) return
+    try { await uninstallSkill(token, name); await refreshInstalled() }
+    catch (err) { setError(err.message || 'Could not uninstall skill') }
+  }
   // Load on mount and whenever we return to chat — an admin may have just
   // added or removed a skill in the dashboard.
-  useEffect(() => { if (view === 'chat') refreshSkills() /* eslint-disable-next-line */ }, [view])
+  useEffect(() => { if (view === 'chat') { refreshSkills(); refreshInstalled() } /* eslint-disable-next-line */ }, [view])
 
   async function refreshFiles(sid = activeId) {
     if (!sid) return
@@ -63,6 +89,7 @@ export default function Workspace({ auth, onLogout }) {
   const streamRef = useRef(null)
   const inputRef = useRef(null)
   const fileRef = useRef(null)
+  const skillRef = useRef(null)
   const initialized = useRef(false)  // guard: StrictMode mounts effects twice in dev
 
   // Focus the composer whenever a session is ready and we're not streaming,
@@ -278,6 +305,9 @@ export default function Workspace({ auth, onLogout }) {
           fileCount={files.length}
           filesOpen={filesOpen}
           onToggleFiles={() => { const n = !filesOpen; setFilesOpen(n); if (n) refreshFiles() }}
+          skillCount={installed.length}
+          skillsOpen={installedOpen}
+          onToggleSkills={() => { const n = !installedOpen; setInstalledOpen(n); if (n) refreshInstalled() }}
         />
 
         {filesOpen && (
@@ -295,6 +325,31 @@ export default function Workspace({ auth, onLogout }) {
                   <span className="fname">{f.name}</span>
                   <span className="fsize">{fmtSize(f.size)} ↓</span>
                 </button>
+              ))
+            )}
+          </div>
+        )}
+
+        {installedOpen && (
+          <div className="files-panel">
+            <div className="files-head">
+              <span>Agent skills</span>
+              <input ref={skillRef} type="file" accept=".zip" hidden onChange={onSkillPicked} />
+              <button className="btn-ghost sm" onClick={() => skillRef.current?.click()} disabled={installing}>
+                {installing ? '…' : '+ Install .zip'}
+              </button>
+            </div>
+            {installed.length === 0 ? (
+              <div className="files-empty">
+                No skills installed. Upload a <code>SKILL.md</code> folder as a .zip;
+                the agent can then load and run it.
+              </div>
+            ) : (
+              installed.map((s) => (
+                <div className="file-row static" key={s.name}>
+                  <span className="fname">🧩 {s.name}{s.description ? ` — ${s.description}` : ''}</span>
+                  <button className="sdel" title="Uninstall" onClick={() => removeInstalled(s.name)}>×</button>
+                </div>
               ))
             )}
           </div>

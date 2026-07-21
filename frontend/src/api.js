@@ -91,6 +91,31 @@ export async function adminDeleteSkill(token, name) {
   }))
 }
 
+// --- agent skills (installed SKILL.md folders the agent can run) ---
+
+export async function getInstalledSkills(token) {
+  return jsonOrThrow(await fetch(`${BASE}/skills/installed`, { headers: authHeaders(token) }))
+}
+
+// Install a skill from a .zip (SKILL.md + scripts). Let the browser set the
+// multipart boundary.
+export async function installSkill(token, file) {
+  const form = new FormData()
+  form.append('file', file)
+  return jsonOrThrow(await fetch(`${BASE}/skills/install`, {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: form,
+  }))
+}
+
+export async function uninstallSkill(token, name) {
+  return jsonOrThrow(await fetch(`${BASE}/skills/installed/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+    headers: authHeaders(token),
+  }))
+}
+
 // List the files in a session's workspace (uploaded + agent-created).
 export async function listFiles(token, sid) {
   return jsonOrThrow(await fetch(`${BASE}/sessions/${sid}/files`, { headers: authHeaders(token) }))
