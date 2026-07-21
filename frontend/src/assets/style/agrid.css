@@ -1,0 +1,47 @@
+.ag-theme-alpine {
+    --ag-font-family: 'Inter', sans-serif;
+    --ag-font-size: 12px;
+    --ag-header-font-weight: 600;
+
+    --ag-header-font-size: 12px;
+}
+
+.ag-theme-alpine .ag-header {
+    background-color: #FAFAFA; /* Dark gray */
+    border: solid 1px white;
+}
+
+.ag-theme-alpine .ag-header-cell {
+    background-color: #FAFAFA;
+    color: #000000;
+    /*border-right: 1px solid #4b5563;*/
+}
+
+.ag-theme-alpine .ag-header-cell-text {
+    color: #000000;
+    font-weight: 600;
+}
+
+/* Header icons (sort arrows, menu) to white */
+.ag-theme-alpine .ag-header-icon {
+    color: #000000;
+}
+
+.ag-theme-alpine .ag-icon {
+    color: #000000;
+}
+
+/* Checkbox styling - smaller size */
+.ag-theme-alpine .ag-checkbox .ag-input-wrapper {
+    width: 14px;
+    height: 14px;
+}
+
+.ag-theme-alpine .ag-checkbox-input {
+    width: 14px;
+    height: 14px;
+}
+
+.ag-theme-alpine .ag-overlay-no-rows-wrapper {
+    color: #ff0000; /* Red text */
+}

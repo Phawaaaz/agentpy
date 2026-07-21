@@ -27,8 +27,8 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, HTTPException, status
-from fastapi.responses import StreamingResponse
+from fastapi import Depends, FastAPI, HTTPException, status, File, UploadFile
+from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
@@ -82,6 +82,23 @@ class MessageResponse(BaseModel):
     session_id: str
     answer: str
     usage: str
+
+
+class MessageHistoryItem(BaseModel):
+    role: str
+    text: str
+    model: str | None = None
+
+
+class MessageHistoryResponse(BaseModel):
+    model: str
+    messages: list[MessageHistoryItem]
+
+
+class ModelsResponse(BaseModel):
+    models: list[str]
+    default: str
+
 
 
 class ApprovalDecision(BaseModel):
@@ -307,6 +324,104 @@ def create_app(config: Config | None = None) -> FastAPI:
         # Purge the on-disk workspace too (mirrors the CLI's /delete fix).
         _delete_workspace(_user_config(_username_for(identity.user_id)), session_id)
 
+    @app.get("/sessions/{session_id}/messages", response_model=MessageHistoryResponse)
+    def get_messages(session_id: str, identity: IdentityDep) -> MessageHistoryResponse:
+        store = DbSessionStore(state.engine, identity.user_id)
+        if session_id not in store.list_ids():
+            raise HTTPException(status_code=404, detail="no such session")
+        username = _username_for(identity.user_id)
+        user_config = _user_config(username)
+        conversation = Conversation(user_config.system_prompt)
+        store.load(session_id, conversation)
+
+        formatted_messages = []
+        for m in conversation.messages:
+            role = m.get("role")
+            if role not in ("user", "assistant"):
+                continue
+            formatted_messages.append(
+                MessageHistoryItem(
+                    role=role,
+                    text=str(m.get("content")) if m.get("content") is not None else "",
+                    model=m.get("model") or user_config.model,
+                )
+            )
+        return MessageHistoryResponse(
+            model=user_config.model,
+            messages=formatted_messages,
+        )
+
+    @app.get("/sessions/{session_id}/files")
+    def list_session_files(session_id: str, identity: IdentityDep) -> dict:
+        import os
+        store = DbSessionStore(state.engine, identity.user_id)
+        if session_id not in store.list_ids():
+            raise HTTPException(status_code=404, detail="no such session")
+        username = _username_for(identity.user_id)
+        user_config = _user_config(username)
+        ws_dir = os.path.join(user_config.workspace_dir, _safe(session_id))
+        if not os.path.isdir(ws_dir):
+            return {"files": []}
+
+        file_list = []
+        for entry in os.scandir(ws_dir):
+            if entry.is_file():
+                file_list.append({
+                    "name": entry.name,
+                    "size": entry.stat().st_size,
+                })
+        return {"files": file_list}
+
+    @app.post("/sessions/{session_id}/files")
+    async def upload_session_files(
+        session_id: str,
+        identity: IdentityDep,
+        files: list[UploadFile] = File(...),
+    ) -> dict:
+        import os
+        store = DbSessionStore(state.engine, identity.user_id)
+        if session_id not in store.list_ids():
+            raise HTTPException(status_code=404, detail="no such session")
+        username = _username_for(identity.user_id)
+        user_config = _user_config(username)
+        ws_dir = os.path.join(user_config.workspace_dir, _safe(session_id))
+        os.makedirs(ws_dir, exist_ok=True)
+
+        saved = []
+        for file in files:
+            if not file.filename:
+                continue
+            filename = os.path.basename(file.filename)
+            file_path = os.path.join(ws_dir, filename)
+            content = await file.read()
+            with open(file_path, "wb") as f:
+                f.write(content)
+            saved.append({
+                "name": filename,
+                "size": len(content),
+            })
+        return {"files": saved}
+
+    @app.get("/sessions/{session_id}/files/{name}")
+    def download_session_file(session_id: str, name: str, identity: IdentityDep) -> FileResponse:
+        import os
+        store = DbSessionStore(state.engine, identity.user_id)
+        if session_id not in store.list_ids():
+            raise HTTPException(status_code=404, detail="no such session")
+        username = _username_for(identity.user_id)
+        user_config = _user_config(username)
+        ws_dir = os.path.join(user_config.workspace_dir, _safe(session_id))
+
+        try:
+            from engine.workspace import confine
+            file_path = confine(ws_dir, name)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        if not os.path.isfile(file_path):
+            raise HTTPException(status_code=404, detail="file not found")
+        return FileResponse(file_path, filename=os.path.basename(file_path))
+
     @app.post("/sessions/{session_id}/messages", response_model=MessageResponse)
     def post_message(session_id: str, body: MessageRequest, identity: IdentityDep) -> MessageResponse:
         store = DbSessionStore(state.engine, identity.user_id)
@@ -398,6 +513,20 @@ def create_app(config: Config | None = None) -> FastAPI:
         return usage_for_user(state.engine, username)
 
     # --- ops --------------------------------------------------------------
+
+    @app.get("/models", response_model=ModelsResponse)
+    def list_models(identity: IdentityDep) -> ModelsResponse:
+        return ModelsResponse(
+            models=[
+                "anthropic/claude-3-5-sonnet-latest",
+                "anthropic/claude-3-opus-latest",
+                "anthropic/claude-3-5-haiku-latest",
+                "openai/gpt-4o",
+                "openai/gpt-4o-mini",
+                "openai/o1-mini",
+            ],
+            default=state.config.model,
+        )
 
     @app.get("/health")
     def health() -> dict:

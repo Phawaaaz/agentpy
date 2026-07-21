@@ -91,7 +91,16 @@ def _run():
     # AUTH ENFORCED: no token / bad token -> 401
     assert client.get("/sessions").status_code == 403 or client.get("/sessions").status_code == 401
     assert client.get("/sessions", headers={"Authorization": "Bearer garbage"}).status_code == 401
+    assert client.get("/models").status_code in (401, 403)
+    assert client.get("/models", headers={"Authorization": "Bearer garbage"}).status_code == 401
     print("  auth enforced: missing/invalid token rejected OK")
+
+    # list models
+    models_resp = client.get("/models", headers=a_auth)
+    assert models_resp.status_code == 200
+    assert "default" in models_resp.json()
+    assert len(models_resp.json()["models"]) > 0
+    print("  list models OK")
 
     # alice creates a session, lists it, runs a turn
     sid = client.post("/sessions", headers=a_auth).json()["session_id"]
@@ -99,6 +108,46 @@ def _run():
     turn = client.post(f"/sessions/{sid}/messages", headers=a_auth, json={"message": "ping"})
     assert turn.status_code == 200, turn.text
     assert turn.json()["answer"] == "handled: ping"
+
+    # get messages history
+    history = client.get(f"/sessions/{sid}/messages", headers=a_auth)
+    assert history.status_code == 200, history.text
+    h_data = history.json()
+    assert "messages" in h_data
+    assert len(h_data["messages"]) == 2
+    assert h_data["messages"][0]["role"] == "user"
+    assert h_data["messages"][0]["text"] == "ping"
+    assert h_data["messages"][1]["role"] == "assistant"
+    assert h_data["messages"][1]["text"] == "handled: ping"
+    # bob cannot see alice's session messages
+    assert client.get(f"/sessions/{sid}/messages", headers=b_auth).status_code == 404
+    print("  get session messages history & isolation OK")
+
+    # FILES API: upload, list, download, isolation
+    # 1. upload file
+    files_payload = [
+        ("files", ("test.txt", b"hello workspace file content", "text/plain"))
+    ]
+    upload = client.post(f"/sessions/{sid}/files", headers=a_auth, files=files_payload)
+    assert upload.status_code == 200, upload.text
+    assert upload.json()["files"] == [{"name": "test.txt", "size": len(b"hello workspace file content")}]
+
+    # 2. list files
+    listing = client.get(f"/sessions/{sid}/files", headers=a_auth)
+    assert listing.status_code == 200, listing.text
+    assert listing.json() == {"files": [{"name": "test.txt", "size": len(b"hello workspace file content")}]}
+
+    # 3. download file
+    download = client.get(f"/sessions/{sid}/files/test.txt", headers=a_auth)
+    assert download.status_code == 200, download.text
+    assert download.content == b"hello workspace file content"
+
+    # 4. isolation: bob cannot list, upload, or download alice's files
+    assert client.get(f"/sessions/{sid}/files", headers=b_auth).status_code == 404
+    assert client.post(f"/sessions/{sid}/files", headers=b_auth, files=files_payload).status_code == 404
+    assert client.get(f"/sessions/{sid}/files/test.txt", headers=b_auth).status_code == 404
+    print("  files API (upload/list/download & isolation) OK")
+
     print("  register/login/create-session/run-turn OK")
 
     # CROSS-USER ISOLATION: bob cannot see, message, or delete alice's session

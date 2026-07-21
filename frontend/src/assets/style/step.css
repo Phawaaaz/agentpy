@@ -1,0 +1,21 @@
+.custom-steps .ant-steps-item-finish .ant-steps-item-icon {
+    background-color: #FFFFFF !important; /* Green for completed */
+    border-color: #FFFFFF !important;
+}
+    .custom-steps .ant-steps-item-process .ant-steps-item-icon {
+        background-color: #262626 !important; /* Blue for current */
+        border-color: #A3A3A3 !important;
+    }
+    .custom-steps .ant-steps-item-wait .ant-steps-item-icon {
+        background-color: #6B7280 !important; /* Gray for pending */
+        border-color: #6B7280 !important;
+    }
+    .custom-steps .ant-steps-item-title {
+        color: #fff !important;
+    }
+    .custom-steps .ant-steps-item-description {
+        color: #D1D5DB !important;
+    }
+    .custom-steps .ant-steps-item-tail::after {
+        background-color: #fff !important;
+    }
