@@ -5,7 +5,21 @@ import {
   getMcpServers, adminCreateMcp, adminDeleteMcp,
 } from '../api.js'
 
-const MCP_BLANK = { name: '', transport: 'http', url: '', command: '', args: '' }
+const MCP_BLANK = { name: '', transport: 'http', url: '', command: '', args: '', env: '' }
+
+// Parse an "env" textarea (KEY=value per line) into an object. Blank lines and
+// lines without '=' are ignored; everything after the first '=' is the value
+// (so tokens with '=' in them survive).
+function parseEnv(text) {
+  const out = {}
+  for (const line of (text || '').split('\n')) {
+    const t = line.trim()
+    if (!t || !t.includes('=')) continue
+    const i = t.indexOf('=')
+    out[t.slice(0, i).trim()] = t.slice(i + 1).trim()
+  }
+  return out
+}
 
 // Read-mostly admin view: live per-user usage (sessions, messages, model
 // calls, tokens, cost) with a global totals row, plus lightweight user
@@ -74,6 +88,7 @@ export default function AdminDashboard({ token, me, onClose }) {
         name: mcpForm.name.trim(), transport: mcpForm.transport,
         url: mcpForm.url.trim(), command: mcpForm.command.trim(),
         args: mcpForm.args.trim() ? mcpForm.args.trim().split(/\s+/) : [],
+        env: mcpForm.transport === 'stdio' ? parseEnv(mcpForm.env) : {},
       }
       const res = await adminCreateMcp(token, payload)
       if (!res.connected) setError(`Saved "${res.name}", but couldn't connect: ${res.error || 'unknown error'}`)
@@ -280,13 +295,18 @@ export default function AdminDashboard({ token, me, onClose }) {
             </select>
           </div>
           {mcpForm.transport === 'stdio' ? (
-            <div className="mcp-form-row">
-              <input placeholder="command (e.g. npx)" value={mcpForm.command}
-                     onChange={(e) => setMcpForm({ ...mcpForm, command: e.target.value })} />
-              <input placeholder="args (space-separated, e.g. -y @modelcontextprotocol/server-filesystem .)"
-                     value={mcpForm.args}
-                     onChange={(e) => setMcpForm({ ...mcpForm, args: e.target.value })} />
-            </div>
+            <>
+              <div className="mcp-form-row">
+                <input placeholder="command (e.g. npx)" value={mcpForm.command}
+                       onChange={(e) => setMcpForm({ ...mcpForm, command: e.target.value })} />
+                <input placeholder="args (space-separated, e.g. -y @modelcontextprotocol/server-filesystem .)"
+                       value={mcpForm.args}
+                       onChange={(e) => setMcpForm({ ...mcpForm, args: e.target.value })} />
+              </div>
+              <textarea className="mcp-env" rows={2} value={mcpForm.env}
+                        placeholder="env / secrets — KEY=value, one per line (e.g. GITHUB_PERSONAL_ACCESS_TOKEN=ghp_…)"
+                        onChange={(e) => setMcpForm({ ...mcpForm, env: e.target.value })} />
+            </>
           ) : (
             <input placeholder="server URL (e.g. https://example.com/mcp)" value={mcpForm.url}
                    onChange={(e) => setMcpForm({ ...mcpForm, url: e.target.value })} />
