@@ -2,7 +2,10 @@ import { useEffect, useState } from 'react'
 import {
   getAdminStats, adminCreateUser, adminSetRole, adminDeleteUser,
   getSkills, adminCreateSkill, adminDeleteSkill,
+  getMcpServers, adminCreateMcp, adminDeleteMcp,
 } from '../api.js'
+
+const MCP_BLANK = { name: '', transport: 'http', url: '', command: '', args: '' }
 
 // Read-mostly admin view: live per-user usage (sessions, messages, model
 // calls, tokens, cost) with a global totals row, plus lightweight user
@@ -15,6 +18,8 @@ export default function AdminDashboard({ token, me, onClose }) {
   const [form, setForm] = useState({ username: '', password: '', role: 'user' })
   const [skills, setSkills] = useState([])
   const [skillForm, setSkillForm] = useState({ name: '', description: '', template: '' })
+  const [mcp, setMcp] = useState([])
+  const [mcpForm, setMcpForm] = useState(MCP_BLANK)
 
   async function refresh() {
     setError('')
@@ -24,6 +29,9 @@ export default function AdminDashboard({ token, me, onClose }) {
     try {
       setSkills(await getSkills(token))
     } catch { /* skills are optional; ignore */ }
+    try {
+      setMcp(await getMcpServers(token))
+    } catch { /* MCP is optional; ignore */ }
   }
 
   useEffect(() => { refresh() /* eslint-disable-next-line */ }, [])
@@ -51,6 +59,37 @@ export default function AdminDashboard({ token, me, onClose }) {
       await adminDeleteSkill(token, name)
       await refresh()
     } catch (e) { setError(e.message || 'Could not delete skill') }
+    finally { setBusy(false) }
+  }
+
+  async function createMcp(e) {
+    e.preventDefault()
+    const isUrl = mcpForm.transport !== 'stdio'
+    if (!mcpForm.name.trim()) return
+    if (isUrl && !mcpForm.url.trim()) { setError('That transport needs a URL'); return }
+    if (!isUrl && !mcpForm.command.trim()) { setError('stdio needs a command'); return }
+    setBusy(true); setError('')
+    try {
+      const payload = {
+        name: mcpForm.name.trim(), transport: mcpForm.transport,
+        url: mcpForm.url.trim(), command: mcpForm.command.trim(),
+        args: mcpForm.args.trim() ? mcpForm.args.trim().split(/\s+/) : [],
+      }
+      const res = await adminCreateMcp(token, payload)
+      if (!res.connected) setError(`Saved "${res.name}", but couldn't connect: ${res.error || 'unknown error'}`)
+      setMcpForm(MCP_BLANK)
+      await refresh()
+    } catch (e) { setError(e.message || 'Could not add MCP server') }
+    finally { setBusy(false) }
+  }
+
+  async function removeMcp(name) {
+    if (!confirm(`Disconnect and remove MCP server "${name}"?`)) return
+    setBusy(true); setError('')
+    try {
+      await adminDeleteMcp(token, name)
+      await refresh()
+    } catch (e) { setError(e.message || 'Could not remove MCP server') }
     finally { setBusy(false) }
   }
 
@@ -196,6 +235,64 @@ export default function AdminDashboard({ token, me, onClose }) {
           <button className="btn-primary compact"
                   disabled={busy || !skillForm.name.trim() || !skillForm.template.trim()}>
             Save skill
+          </button>
+        </form>
+      </div>
+
+      <div className="admin-card">
+        <div className="admin-card-title">MCP tool servers</div>
+        <p className="admin-hint">
+          Connect external <strong>MCP</strong> servers to give every session new tools.
+          Their tools appear namespaced as <code>mcp__server__tool</code>. Org-wide and
+          persisted — they reconnect on restart.
+        </p>
+        {mcp.length > 0 && (
+          <div className="mcp-list">
+            {mcp.map((s) => (
+              <div className="mcp-row" key={s.name}>
+                <div className="mcp-row-text">
+                  <span className="mcp-row-name">
+                    {s.name}
+                    <span className={'mcp-dot ' + (s.connected ? 'ok' : 'down')}
+                          title={s.connected ? 'connected' : 'not connected'} />
+                    <span className="mcp-transport">{s.transport}</span>
+                  </span>
+                  <span className="mcp-row-target">{s.url || s.command}</span>
+                  {s.connected
+                    ? <span className="mcp-row-tools">{s.tools.length} tool{s.tools.length !== 1 ? 's' : ''}: {s.tools.join(', ')}</span>
+                    : <span className="mcp-row-err">{s.error || 'not connected'}</span>}
+                </div>
+                <button className="btn-mini danger" disabled={busy}
+                        onClick={() => removeMcp(s.name)}>Remove</button>
+              </div>
+            ))}
+          </div>
+        )}
+        <form className="new-mcp-form" onSubmit={createMcp}>
+          <div className="mcp-form-row">
+            <input placeholder="name (e.g. search)" value={mcpForm.name}
+                   onChange={(e) => setMcpForm({ ...mcpForm, name: e.target.value })} />
+            <select value={mcpForm.transport}
+                    onChange={(e) => setMcpForm({ ...mcpForm, transport: e.target.value })}>
+              <option value="http">http</option>
+              <option value="sse">sse</option>
+              <option value="stdio">stdio</option>
+            </select>
+          </div>
+          {mcpForm.transport === 'stdio' ? (
+            <div className="mcp-form-row">
+              <input placeholder="command (e.g. npx)" value={mcpForm.command}
+                     onChange={(e) => setMcpForm({ ...mcpForm, command: e.target.value })} />
+              <input placeholder="args (space-separated, e.g. -y @modelcontextprotocol/server-filesystem .)"
+                     value={mcpForm.args}
+                     onChange={(e) => setMcpForm({ ...mcpForm, args: e.target.value })} />
+            </div>
+          ) : (
+            <input placeholder="server URL (e.g. https://example.com/mcp)" value={mcpForm.url}
+                   onChange={(e) => setMcpForm({ ...mcpForm, url: e.target.value })} />
+          )}
+          <button className="btn-primary compact" disabled={busy || !mcpForm.name.trim()}>
+            {busy ? 'Connecting…' : 'Add & connect'}
           </button>
         </form>
       </div>

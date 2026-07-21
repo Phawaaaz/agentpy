@@ -834,8 +834,14 @@ button {
 .skill-name { font-size: 14px; font-weight: 600; color: var(--text); }
 .skill-desc { font-size: 12px; color: var(--text-muted); }
 
+/* Admin hint text (shared by the skills + MCP cards). */
+.admin-hint { margin: 0; padding: 0 20px 12px; font-size: 13px; color: var(--text-muted); }
+.admin-hint code {
+  font-family: var(--mono); font-size: 12px;
+  background: var(--bg-muted); padding: 1px 5px; border-radius: 5px;
+}
+
 /* Admin skills management list. */
-.admin-hint { margin: 0; padding: 0 20px 10px; font-size: 13px; color: var(--text-muted); }
 .skill-list { display: flex; flex-direction: column; }
 .skill-row {
   display: flex;
@@ -876,3 +882,46 @@ button {
 }
 .new-skill-form input:focus, .new-skill-form textarea:focus { border-color: var(--accent); }
 .new-skill-form .btn-primary.compact { align-self: flex-start; }
+
+/* ---------------- MCP tool servers (admin) ---------------- */
+
+.mcp-list { display: flex; flex-direction: column; }
+.mcp-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+}
+.mcp-row-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.mcp-row-name {
+  font-size: 14px; font-weight: 600; color: var(--text);
+  display: inline-flex; align-items: center; gap: 8px;
+}
+.mcp-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.mcp-dot.ok { background: #10b981; }
+.mcp-dot.down { background: var(--danger); }
+.mcp-transport {
+  font-size: 11px; font-weight: 600; color: var(--text-muted);
+  background: var(--bg-muted); border: 1px solid var(--border);
+  border-radius: 999px; padding: 1px 8px; text-transform: uppercase;
+}
+.mcp-row-target { font-size: 12px; font-family: var(--mono); color: var(--text-muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mcp-row-tools { font-size: 12px; color: var(--text-muted); }
+.mcp-row-err { font-size: 12px; color: var(--danger); }
+
+.new-mcp-form {
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 18px 20px; border-top: 1px solid var(--border);
+}
+.mcp-form-row { display: flex; gap: 10px; }
+.mcp-form-row input { flex: 1; }
+.new-mcp-form input, .new-mcp-form select {
+  padding: 10px 13px; font-size: 15px;
+  border: 1px solid var(--border); border-radius: 10px; outline: none;
+  font-family: inherit; min-width: 0;
+}
+.new-mcp-form input:focus, .new-mcp-form select:focus { border-color: var(--accent); }
+.new-mcp-form .btn-primary.compact { align-self: flex-start; }
