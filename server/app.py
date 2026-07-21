@@ -9,6 +9,7 @@ Run:  python -m server.app     (or via ./demo.sh)
 """
 
 import asyncio
+import base64
 import json
 import os
 import queue
@@ -65,6 +66,63 @@ _TOOL_CAP = 2000
 _MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB per file
 _UNSAFE_NAME = re.compile(r"[^A-Za-z0-9._ -]")
 
+# Image support (vision). Extensions we'll hand to a multimodal model as an
+# image block, and the model-name fragments that mean "this model can see".
+_IMAGE_MIME = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".gif": "image/gif", ".webp": "image/webp",
+}
+_VISION_HINTS = ("gpt-4o", "gpt-4.1", "o1", "o3", "o4", "claude", "opus",
+                 "sonnet", "haiku", "gemini", "llava", "vision", "pixtral",
+                 "llama-3.2", "llama-4", "qwen2-vl", "qwen2.5-vl")
+# Cap per-image bytes sent inline so one giant upload can't blow the request
+# up; anything bigger the user can still have the agent read via tools.
+_MAX_IMAGE_INLINE_BYTES = 8 * 1024 * 1024
+
+
+def _model_supports_vision(model: str) -> bool:
+    m = (model or "").lower()
+    return any(h in m for h in _VISION_HINTS)
+
+
+def _image_mime(name: str) -> str | None:
+    return _IMAGE_MIME.get(os.path.splitext(name.lower())[1])
+
+
+def _data_uri(path: str, mime: str) -> str:
+    with open(path, "rb") as f:
+        return f"data:{mime};base64,{base64.b64encode(f.read()).decode('ascii')}"
+
+
+def _build_turn_content(text: str, image_names: list[str], model: str, wsdir: str):
+    """Build the user turn's content for the model.
+
+    Returns (content, shown_names). When the model supports vision and one or
+    more of `image_names` name a real image file in the session workspace,
+    `content` is the OpenAI-style multimodal list ([{text}, {image_url}, ...])
+    and `shown_names` lists the images actually attached. Otherwise `content`
+    is the plain `text` string and `shown_names` is empty. Non-image names,
+    missing files, and oversized files are skipped silently — the agent can
+    still read those with its file tools.
+    """
+    if not image_names or not _model_supports_vision(model):
+        return text, []
+    blocks: list[dict] = [{"type": "text", "text": text}]
+    shown: list[str] = []
+    for name in image_names:
+        safe = _safe_filename(name)
+        mime = _image_mime(safe)
+        path = os.path.join(wsdir, safe)
+        if not mime or not os.path.isfile(path):
+            continue
+        if os.path.getsize(path) > _MAX_IMAGE_INLINE_BYTES:
+            continue
+        blocks.append({"type": "image_url", "image_url": {"url": _data_uri(path, mime)}})
+        shown.append(safe)
+    if not shown:
+        return text, []
+    return blocks, shown
+
 
 class _Cancelled(Exception):
     """Raised inside the agent loop (via on_event) to stop a turn on request."""
@@ -91,6 +149,9 @@ class NewSession(BaseModel):
 class Message(BaseModel):
     message: str
     model: str | None = None  # optional per-turn model switch
+    # Names of already-uploaded workspace files to show the model as images
+    # this turn (vision). Ignored for non-vision models; see _build_turn_content.
+    images: list[str] = []
 
 
 class NewUser(BaseModel):
@@ -389,7 +450,19 @@ def create_app(config: Config | None = None) -> FastAPI:
                     approver=lambda c, t: True, on_event=on_event,
                     conversation=conv, usage_tracker=usage, stream=True,
                 )
-                answer = agent.run(body.message)
+                # Vision: if this turn references uploaded images and the model
+                # can see, send the user message as multimodal content blocks
+                # (text + inline images). Otherwise send plain text as before.
+                wsdir = f"{user_config.workspace_dir}/{sid}"
+                content, shown_names = _build_turn_content(body.message, body.images, model, wsdir)
+                user_idx = len(conv.messages)  # where run() will append this turn
+                answer = agent.run(content)
+                # Don't persist (or re-send next turn) the base64 image blocks —
+                # collapse them back to a short text note once the model has seen
+                # them ("see-once"). Keeps history and compaction lean.
+                if shown_names and 0 <= user_idx < len(conv.messages):
+                    conv.messages[user_idx]["content"] = (
+                        body.message + f"\n[Attached image(s): {', '.join(shown_names)}]")
                 store.save(sid, conv)
                 emit("assistant_message", {"text": answer, "model": model})
                 emit("usage", {

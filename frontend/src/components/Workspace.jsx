@@ -9,6 +9,7 @@ import {
 } from '../api.js'
 
 const LAST_SID_KEY = 'harness_demo_last_sid'
+const IMAGE_RE = /\.(png|jpe?g|gif|webp)$/i
 
 export default function Workspace({ auth, onLogout }) {
   const { access_token: token } = auth
@@ -183,6 +184,9 @@ export default function Workspace({ auth, onLogout }) {
     const text = input.trim()
     if ((!text && attached.length === 0) || streaming || !activeId) return
     const files = attached
+    // Images are shown to a vision-capable model directly (see-once); the
+    // rest are just noted as being in the workspace for the file tools.
+    const images = files.filter((f) => IMAGE_RE.test(f.name)).map((f) => f.name)
     // What the user sees, and (with a note about any files) what the agent gets.
     const shown = text || `I've uploaded ${files.length} file${files.length !== 1 ? 's' : ''}.`
     const note = files.length
@@ -234,7 +238,7 @@ export default function Workspace({ auth, onLogout }) {
       }
     }
 
-    const ctrl = streamTurn(token, activeId, shown + note, model, onEvent)
+    const ctrl = streamTurn(token, activeId, shown + note, model, images, onEvent)
     streamRef.current = ctrl
     await ctrl.done
     streamRef.current = null
