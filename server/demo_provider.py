@@ -42,7 +42,13 @@ class DemoProvider(Provider):
     def _last_user(self, messages):
         for m in reversed(messages):
             if m.get("role") == "user":
-                return (m.get("content") or "").lower()
+                content = m.get("content") or ""
+                # Vision turns carry a list of content blocks; pull the text.
+                if isinstance(content, list):
+                    content = " ".join(
+                        b.get("text", "") for b in content
+                        if isinstance(b, dict) and b.get("type") == "text")
+                return content.lower()
         return ""
 
     def _tool_results_since_user(self, messages):

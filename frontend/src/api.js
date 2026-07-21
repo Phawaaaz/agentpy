@@ -131,7 +131,9 @@ export async function adminDeleteUser(token, username) {
 
 // Stream a turn. Calls onEvent(type, data) for every SSE frame; returns a
 // controller with abort(). Resolves the returned promise when the stream ends.
-export function streamTurn(token, sid, message, model, onEvent) {
+// `images` is an optional list of uploaded image filenames to show a vision
+// model this turn.
+export function streamTurn(token, sid, message, model, images, onEvent) {
   const ctrl = new AbortController()
   const done = (async () => {
     let res
@@ -139,7 +141,7 @@ export function streamTurn(token, sid, message, model, onEvent) {
       res = await fetch(`${BASE}/sessions/${sid}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
-        body: JSON.stringify({ message, model }),
+        body: JSON.stringify({ message, model, images: images || [] }),
         signal: ctrl.signal,
       })
     } catch (e) {
