@@ -180,7 +180,7 @@ export function streamTurn(token, sid, message, model, images, onEvent) {
   const done = (async () => {
     let res
     try {
-      res = await fetch(`${BASE}/sessions/${sid}/messages/stream`, {
+      res = await fetch(`${BASE}/sessions/${sid}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
         body: JSON.stringify({ message, model, images: images || [] }),

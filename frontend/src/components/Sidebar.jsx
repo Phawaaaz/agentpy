@@ -1,3 +1,5 @@
+import logo from '../assets/image/logo-lg.png'
+
 export default function Sidebar({ user, sessions, activeId, onSelect, onNew, onDelete, onLogout,
                                   isAdmin, onAdmin, adminActive }) {
   const initial = (user.username || '?')[0].toUpperCase()
@@ -5,7 +7,7 @@ export default function Sidebar({ user, sessions, activeId, onSelect, onNew, onD
   return (
     <aside className="sidebar">
       <div className="sidebar-head">
-        <div className="brand">Agent Harness<span className="dot">.</span></div>
+        <img className="brand-logo" src={logo} alt="Floowpay" />
       </div>
 
       <button className="btn-new" onClick={onNew}>+ New session</button>
