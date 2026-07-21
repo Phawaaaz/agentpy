@@ -240,13 +240,27 @@ export default function Workspace({ auth, onLogout }) {
       }
     }
 
+    // Snapshot the workspace so we can show which files this turn produced.
+    const beforeFiles = new Map(files.map((f) => [f.name, f.size]))
+
     const ctrl = streamTurn(token, activeId, shown + note, model, images, onEvent)
     streamRef.current = ctrl
     await ctrl.done
     streamRef.current = null
     setStreaming(false)
-    patchAssistant((a) => { const { _streaming, ...rest } = a; return rest })
-    refreshFiles()  // the agent may have created files this turn
+
+    // Diff the workspace: files that are new or changed this turn become
+    // downloadable chips under the reply ("return files").
+    let produced = []
+    try {
+      const after = (await listFiles(token, activeId)).files
+      produced = after.filter((f) => beforeFiles.get(f.name) !== f.size)
+      setFiles(after)
+    } catch { /* ignore */ }
+    patchAssistant((a) => {
+      const { _streaming, ...rest } = a
+      return produced.length ? { ...rest, produced } : rest
+    })
   }
 
   // auto-scroll to the newest content
@@ -350,6 +364,7 @@ export default function Workspace({ auth, onLogout }) {
             ) : (
               messages.map((m, i) => (
                 <Message key={i} msg={m} hideTools={hideTools}
+                         onDownload={(name) => downloadFile(token, activeId, name)}
                          streaming={m.role === 'assistant' && m._streaming && streaming} />
               ))
             )}

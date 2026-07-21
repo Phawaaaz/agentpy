@@ -818,6 +818,35 @@ button {
   font-variant-numeric: tabular-nums;
 }
 
+/* Files the agent produced this turn — downloadable chips under the reply. */
+.produced-files {
+  margin-top: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.produced-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-right: 2px;
+}
+.file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-family: var(--mono);
+  color: var(--text);
+  background: var(--bg-muted);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 11px;
+}
+.file-chip:hover { border-color: var(--accent); color: var(--accent); }
+.file-chip .dl { color: var(--accent); font-weight: 700; }
+
 /* ---------------- Skills (prompt presets) ---------------- */
 
 /* Composer dropdown that lists skills to insert. */
