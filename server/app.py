@@ -22,15 +22,17 @@ import zipfile
 from dataclasses import dataclass, replace
 from datetime import datetime
 
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status
+import httpx
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
 import context_engine.memory_tool
 import engine.builtin.agent_skills  # noqa: F401  (register use_skill tool)
 import engine.builtin.filesystem  # noqa: F401  (register tools)
+import engine.builtin.github_tools  # noqa: F401  (register github_request tool)
 import engine.builtin.git_tool  # noqa: F401
 import engine.builtin.offload
 import engine.builtin.planning  # noqa: F401
@@ -49,7 +51,7 @@ from providers.factory import build_provider
 from providers.model_info import effective_context_budget, effective_max_tokens
 from server.demo_provider import DemoProvider
 from storage.db import make_engine
-from storage.models import MCPServer, ROLE_ADMIN, Session as SessionRow, Skill, UsageLog, User
+from storage.models import GitHubAccount, MCPServer, ROLE_ADMIN, Session as SessionRow, Skill, UsageLog, User
 from storage.session_store import DbSessionStore
 from storage.user_store import DbUserStore
 
@@ -209,6 +211,32 @@ def _install_skill_zip(skills_root: str, data: bytes) -> dict:
             shutil.rmtree(dest)  # reinstall replaces the old copy
         shutil.copytree(md_dir, dest)
         return {"name": name, "description": meta["description"]}
+
+
+def _github_account(db_engine, user_id: int) -> "GitHubAccount | None":
+    from sqlalchemy.orm import Session as OrmSession
+    with OrmSession(db_engine) as db:
+        return db.get(GitHubAccount, user_id)
+
+
+def _github_token(db_engine, user_id: int) -> str | None:
+    acct = _github_account(db_engine, user_id)
+    return acct.token if acct else None
+
+
+def _store_github(db_engine, user_id: int, login: str, token: str) -> None:
+    from sqlalchemy.orm import Session as OrmSession
+    with OrmSession(db_engine) as db:
+        db.merge(GitHubAccount(user_id=user_id, login=login, token=token))
+        db.commit()
+
+
+def _delete_github(db_engine, user_id: int) -> None:
+    from sqlalchemy import delete as sa_delete
+    from sqlalchemy.orm import Session as OrmSession
+    with OrmSession(db_engine) as db:
+        db.execute(sa_delete(GitHubAccount).where(GitHubAccount.user_id == user_id))
+        db.commit()
 
 
 class Login(BaseModel):
@@ -429,6 +457,85 @@ def create_app(config: Config | None = None) -> FastAPI:
         if safe and os.path.isdir(dest):
             shutil.rmtree(dest)
 
+    # --- GitHub: per-user "Connect GitHub" via OAuth ----------------------
+
+    def _github_redirect_uri(request: Request) -> str:
+        base = (config.public_url or str(request.base_url)).rstrip("/")
+        return f"{base}/oauth/github/callback"
+
+    @app.get("/github/status")
+    def github_status(p: Principal = Depends(principal)):
+        acct = _github_account(db_engine, p.user_id)
+        return {
+            "available": bool(config.github_client_id and config.github_client_secret),
+            "connected": acct is not None,
+            "login": acct.login if acct else None,
+        }
+
+    @app.delete("/github", status_code=204)
+    def github_disconnect(p: Principal = Depends(principal)):
+        _delete_github(db_engine, p.user_id)
+
+    @app.get("/oauth/github/start")
+    def github_start(token: str, request: Request):
+        # A top-level browser redirect can't carry a Bearer header, so the JWT
+        # comes as a query param; we verify it and mint a short-lived signed
+        # `state` carrying the user id (CSRF protection + who's connecting).
+        if not (config.github_client_id and config.github_client_secret):
+            raise HTTPException(503, "GitHub OAuth is not configured on this server")
+        try:
+            claims = verify_token(token, jwt_secret)
+        except TokenError as exc:
+            raise HTTPException(401, f"invalid token: {exc}")
+        state = issue_token(claims["user_id"], "oauth", jwt_secret, ttl_s=600)
+        params = httpx.QueryParams({
+            "client_id": config.github_client_id,
+            "redirect_uri": _github_redirect_uri(request),
+            "scope": "repo read:user",
+            "state": state,
+        })
+        return RedirectResponse(f"https://github.com/login/oauth/authorize?{params}")
+
+    @app.get("/oauth/github/callback")
+    def github_callback(code: str, state: str, request: Request):
+        if not (config.github_client_id and config.github_client_secret):
+            raise HTTPException(503, "GitHub OAuth is not configured on this server")
+        try:
+            claims = verify_token(state, jwt_secret)
+        except TokenError:
+            raise HTTPException(400, "invalid or expired OAuth state")
+        user_id = claims["user_id"]
+        # Exchange the code for an access token.
+        try:
+            tok_resp = httpx.post(
+                "https://github.com/login/oauth/access_token",
+                headers={"Accept": "application/json"},
+                data={
+                    "client_id": config.github_client_id,
+                    "client_secret": config.github_client_secret,
+                    "code": code,
+                    "redirect_uri": _github_redirect_uri(request),
+                },
+                timeout=30,
+            )
+            access_token = tok_resp.json().get("access_token")
+        except (httpx.HTTPError, ValueError):
+            access_token = None
+        if not access_token:
+            return RedirectResponse("/?github=error")
+        # Fetch the login so we can show "@name" and confirm the token works.
+        login = ""
+        try:
+            me = httpx.get("https://api.github.com/user",
+                           headers={"Authorization": f"Bearer {access_token}",
+                                    "Accept": "application/vnd.github+json"},
+                           timeout=30)
+            login = me.json().get("login", "")
+        except (httpx.HTTPError, ValueError):
+            pass
+        _store_github(db_engine, user_id, login, access_token)
+        return RedirectResponse("/?github=connected")
+
     # --- MCP tool servers (admin-configured, org-wide) --------------------
 
     @app.get("/admin/mcp")
@@ -631,11 +738,19 @@ def create_app(config: Config | None = None) -> FastAPI:
                 engine.builtin.offload.set_offload_root(user_config.offload_dir)
                 engine.workspace.set_workspace_root(f"{user_config.workspace_dir}/{sid}")
                 engine.builtin.agent_skills.set_skills_root(user_config.skills_dir)
+                # This user's GitHub token (per-request) so github_request acts
+                # as them; None if they haven't connected GitHub.
+                gh = _github_account(db_engine, p.user_id)
+                engine.builtin.github_tools.set_github_token(gh.token if gh else None)
                 provider = _provider_for(model)
                 # Progressive disclosure: tell the model which skills are
                 # installed so it can call use_skill(name) when relevant.
                 system_prompt = (user_config.system_prompt
                                  + engine.builtin.agent_skills.skills_catalog_text(user_config.skills_dir))
+                if gh:
+                    system_prompt += (f"\n\n## GitHub\nThe user has connected their GitHub account "
+                                      f"(@{gh.login}). Use the github_request tool to act on GitHub "
+                                      f"on their behalf when relevant.")
                 conv = Conversation(
                     system_prompt,
                     max_context_tokens=effective_context_budget(model, user_config.max_context_tokens),

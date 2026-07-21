@@ -134,6 +134,15 @@ class Config:
     # when HARNESS_JWT_SECRET isn't set, and the token lifetime.
     jwt_secret_path: str = ".harness/jwt_secret"
     jwt_ttl_s: int = 7 * 24 * 3600
+    # GitHub OAuth app (org-wide) so users can connect their own GitHub from
+    # the web UI. Register an OAuth App on GitHub and set these; unset = the
+    # "Connect GitHub" flow is disabled.
+    github_client_id: str | None = None
+    github_client_secret: str | None = None
+    # Public base URL of the app (e.g. https://ai.floowpay.com), used to build
+    # the GitHub OAuth callback. Unset = derive from the incoming request
+    # (fine for localhost; set it in production behind a proxy).
+    public_url: str | None = None
     # Tavily API key for the web_search tool; unset = DuckDuckGo fallback (D25).
     search_api_key: str | None = None
     # Workspace confinement (D27): when True, filesystem/shell tools are
@@ -238,6 +247,9 @@ class Config:
             jwt_secret_path=get_val("HARNESS_JWT_SECRET_PATH", "jwt_secret_path", cls.jwt_secret_path),
             jwt_ttl_s=get_val("HARNESS_JWT_TTL", "jwt_ttl_s", cls.jwt_ttl_s, int),
             search_api_key=get_val("HARNESS_SEARCH_API_KEY", "search_api_key", cls.search_api_key) or None,
+            github_client_id=get_val("HARNESS_GITHUB_CLIENT_ID", "github_client_id", cls.github_client_id) or None,
+            github_client_secret=get_val("HARNESS_GITHUB_CLIENT_SECRET", "github_client_secret", cls.github_client_secret) or None,
+            public_url=get_val("HARNESS_PUBLIC_URL", "public_url", cls.public_url) or None,
             confine_workspace=get_val("HARNESS_CONFINE_WORKSPACE", "confine_workspace", cls.confine_workspace, to_bool),
             workspace_dir=get_val("HARNESS_WORKSPACE_DIR", "workspace_dir", cls.workspace_dir),
             skills_dir=get_val("HARNESS_SKILLS_DIR", "skills_dir", cls.skills_dir),

@@ -161,7 +161,27 @@ After **Add & connect**, a green dot and the tool list mean it's live; a red dot
 shows the connect error so you can fix and retry. stdio servers run a command on
 the backend host, so this is admin-only.
 
-## 9. Backups
+## 9. Letting users connect their GitHub
+
+Each user can authorize their own GitHub from the app (**🐙 Connect GitHub** in
+the top bar) — no token pasting. Set it up once:
+
+1. Create a **GitHub OAuth App** at <https://github.com/settings/developers> →
+   *New OAuth App*.
+2. **Authorization callback URL**: `https://<your-domain>/oauth/github/callback`
+   (must match exactly).
+3. Copy the **Client ID** and generate a **Client secret**, then set in `.env`:
+
+   ```bash
+   HARNESS_GITHUB_CLIENT_ID=Iv1.xxxx
+   HARNESS_GITHUB_CLIENT_SECRET=xxxx
+   HARNESS_PUBLIC_URL=https://<your-domain>   # so the callback is built right
+   ```
+4. `docker compose up -d`. Users click **Connect GitHub**, authorize on GitHub,
+   and the agent can then act on their GitHub (via the `github_request` tool) as
+   *them* — per user, isolated. Without these vars the button simply doesn't show.
+
+## 10. Backups
 
 Durable data is in two volumes: `pgdata` (database) and `workspaces` (files).
 
@@ -171,7 +191,7 @@ docker compose exec db pg_dump -U harness harness > backup-$(date +%F).sql
 
 Restore with `psql`; schedule with cron.
 
-## 10. Updating
+## 11. Updating
 
 ```bash
 cd agentpy && git pull && cd deploy && docker compose up -d --build
@@ -180,7 +200,7 @@ cd agentpy && git pull && cd deploy && docker compose up -d --build
 Database and workspaces are preserved (they're volumes); schema changes apply on
 boot.
 
-## 11. Hardening checklist
+## 12. Hardening checklist
 
 - [ ] Strong `POSTGRES_PASSWORD`, long random `HARNESS_JWT_SECRET`.
 - [ ] Deleted the seeded `alice`/`bob` accounts (§4).

@@ -7,6 +7,7 @@ import {
   getModels, listSessions, createSession, deleteSession, getMessages, streamTurn, uploadFiles,
   listFiles, downloadFile, cancelTurn, getSkills,
   getInstalledSkills, installSkill, uninstallSkill,
+  getGithubStatus, githubConnectUrl, disconnectGithub,
 } from '../api.js'
 
 const LAST_SID_KEY = 'harness_demo_last_sid'
@@ -39,7 +40,23 @@ export default function Workspace({ auth, onLogout }) {
   const [installing, setInstalling] = useState(false)
   const [menuIndex, setMenuIndex] = useState(0)     // keyboard selection in the slash/✨ menu
   const [slashDismissed, setSlashDismissed] = useState(false)  // Esc closes the "/" menu
+  const [github, setGithub] = useState({ available: false, connected: false, login: null })
   const isAdmin = user.role === 'admin'
+
+  async function refreshGithub() {
+    try { setGithub(await getGithubStatus(token)) } catch { /* ignore */ }
+  }
+
+  function connectGithub() {
+    // Top-level navigation into the OAuth flow; GitHub redirects back to the
+    // app, where refreshGithub() (on load) then shows it connected.
+    window.location.href = githubConnectUrl(token)
+  }
+
+  async function unlinkGithub() {
+    if (!confirm('Disconnect your GitHub account?')) return
+    try { await disconnectGithub(token); await refreshGithub() } catch { /* ignore */ }
+  }
 
   async function refreshSkills() {
     try { setSkills(await getSkills(token)) } catch { /* ignore */ }
@@ -68,7 +85,7 @@ export default function Workspace({ auth, onLogout }) {
   }
   // Load on mount and whenever we return to chat — an admin may have just
   // added or removed a skill in the dashboard.
-  useEffect(() => { if (view === 'chat') { refreshSkills(); refreshInstalled() } /* eslint-disable-next-line */ }, [view])
+  useEffect(() => { if (view === 'chat') { refreshSkills(); refreshInstalled(); refreshGithub() } /* eslint-disable-next-line */ }, [view])
 
   async function refreshFiles(sid = activeId) {
     if (!sid) return
@@ -356,6 +373,7 @@ export default function Workspace({ auth, onLogout }) {
           skillCount={installed.length}
           skillsOpen={installedOpen}
           onToggleSkills={() => { const n = !installedOpen; setInstalledOpen(n); if (n) refreshInstalled() }}
+          github={github} onConnectGithub={connectGithub} onUnlinkGithub={unlinkGithub}
         />
 
         {filesOpen && (

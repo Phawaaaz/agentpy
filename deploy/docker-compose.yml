@@ -44,6 +44,11 @@ services:
       HARNESS_API_KEY: ${HARNESS_API_KEY:-}
       HARNESS_FALLBACK_MODEL: ${HARNESS_FALLBACK_MODEL:-}
       HARNESS_DEMO_FAKE: ${HARNESS_DEMO_FAKE:-}
+      # GitHub OAuth ("Connect GitHub"). Register a GitHub OAuth App and set
+      # these; PUBLIC_URL must match the app's callback URL host.
+      HARNESS_GITHUB_CLIENT_ID: ${HARNESS_GITHUB_CLIENT_ID:-}
+      HARNESS_GITHUB_CLIENT_SECRET: ${HARNESS_GITHUB_CLIENT_SECRET:-}
+      HARNESS_PUBLIC_URL: ${HARNESS_PUBLIC_URL:-}
     volumes:
       - workspaces:/data/workspaces
     depends_on:
