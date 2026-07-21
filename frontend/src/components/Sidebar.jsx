@@ -10,7 +10,7 @@ export default function Sidebar({ user, sessions, activeId, onSelect, onNew, onD
         <img className="brand-logo" src={logo} alt="Floowpay" />
       </div>
 
-      <button className="btn-new" onClick={onNew}>+ New session</button>
+      <button className="btn-new" onClick={onNew}>+ New chat</button>
 
       <div className="session-list">
         {sessions.length === 0 ? (

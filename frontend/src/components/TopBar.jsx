@@ -1,4 +1,4 @@
-export default function TopBar({ models, model, onModelChange, disabled, sandboxOn, title,
+export default function TopBar({ sandboxOn, title,
                                 hideTools, onToggleHideTools,
                                 fileCount, filesOpen, onToggleFiles }) {
   return (
@@ -21,11 +21,6 @@ export default function TopBar({ models, model, onModelChange, disabled, sandbox
         <span className="glyph">{sandboxOn ? '🛡' : '○'}</span>
         Sandbox {sandboxOn ? 'ON' : 'OFF'}
       </div>
-
-      <select className="model-select" value={model} disabled={disabled}
-              onChange={(e) => onModelChange(e.target.value)}>
-        {models.map((m) => <option key={m} value={m}>{m}</option>)}
-      </select>
     </div>
   )
 }
