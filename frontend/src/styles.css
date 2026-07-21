@@ -342,13 +342,15 @@ button {
 }
 
 .bubble-user {
-  background: var(--accent-soft);
-  border: 1px solid var(--accent-border);
-  border-radius: var(--radius);
-  padding: 14px 18px;
-  font-size: 17px;
+  background: var(--bg-muted);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px 16px;
+  font-size: 16px;
   white-space: pre-wrap;
   word-wrap: break-word;
+  display: inline-block;
+  max-width: 100%;
 }
 .bubble-assistant {
   font-size: 17px;
@@ -477,41 +479,89 @@ button {
 
 /* ---------------- Composer ---------------- */
 
+/* Codex/Claude-style composer: one elevated rounded box with the textarea on
+   top and a bottom toolbar (attach, skills, model on the left; a round send
+   button on the right). */
 .composer {
-  border-top: 1px solid var(--border);
-  padding: 16px 26px 22px;
+  padding: 10px 26px 24px;
 }
-.composer-inner {
+.composer-box {
   max-width: 820px;
   margin: 0 auto;
-  display: flex;
-  gap: 12px;
-  align-items: flex-end;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 12px 12px 10px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.composer-box:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 .composer textarea {
-  flex: 1;
+  width: 100%;
+  border: none;
   resize: none;
   font-family: inherit;
-  font-size: 17px;
-  padding: 13px 16px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  outline: none;
-  max-height: 180px;
-  line-height: 1.5;
-}
-.composer textarea:focus { border-color: var(--accent); }
-.btn-send {
-  padding: 13px 22px;
   font-size: 16px;
-  font-weight: 600;
-  color: #fff;
-  background: var(--accent);
-  border: none;
-  border-radius: 12px;
-  height: 50px;
+  padding: 6px 8px;
+  outline: none;
+  max-height: 200px;
+  line-height: 1.5;
+  background: transparent;
 }
-.btn-send:disabled { opacity: 0.5; cursor: default; }
+.composer-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 4px;
+}
+.composer-tools { display: flex; align-items: center; gap: 6px; }
+.tool-btn {
+  height: 34px;
+  min-width: 34px;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  font-size: 17px;
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.tool-btn:hover:not(:disabled) { background: var(--bg-muted); color: var(--accent); }
+.tool-btn:disabled { opacity: 0.45; cursor: default; }
+.tool-btn.on { color: var(--accent); background: var(--accent-soft); }
+.model-select.mini {
+  height: 34px;
+  min-width: 0;
+  max-width: 200px;
+  border: none;
+  background: transparent;
+  font-size: 13px;
+  color: var(--text-muted);
+  padding: 0 6px;
+  border-radius: 8px;
+}
+.model-select.mini:hover { background: var(--bg-muted); }
+.btn-send-circle {
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 18px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.btn-send-circle:disabled { opacity: 0.3; cursor: default; }
+.btn-send-circle.stop { background: var(--danger); font-size: 13px; }
 
 .banner-error {
   max-width: 820px;
@@ -538,18 +588,18 @@ button {
 /* ---------------- Admin dashboard ---------------- */
 
 .btn-admin {
-  margin: 0 20px 12px;
-  padding: 11px;
-  font-size: 15px;
+  margin: 0 12px 6px;
+  padding: 10px 12px;
+  font-size: 14px;
   font-weight: 600;
-  color: var(--text);
-  background: var(--bg);
-  border: 1px solid var(--border);
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
   border-radius: 10px;
   text-align: left;
 }
-.btn-admin:hover { border-color: var(--accent); color: var(--accent); }
-.btn-admin.active { background: var(--accent-soft); border-color: var(--accent-border); color: var(--accent); }
+.btn-admin:hover { filter: brightness(0.97); }
+.btn-admin.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 
 .admin {
   flex: 1;
@@ -735,11 +785,11 @@ button {
 .btn-attach.on { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-border); }
 
 .attach-row {
-  max-width: 820px;
-  margin: 0 auto 10px;
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  margin: 0 0 8px;
+  padding: 0 4px;
 }
 .attach-chip {
   display: inline-flex;

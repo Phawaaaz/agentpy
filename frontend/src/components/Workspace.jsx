@@ -387,17 +387,6 @@ export default function Workspace({ auth, onLogout }) {
         )}
 
         <div className="composer">
-          {attached.length > 0 && (
-            <div className="attach-row">
-              {attached.map((f, i) => (
-                <span className="attach-chip" key={f.name + i}>
-                  📎 {f.name}
-                  <button className="attach-x" title="Remove"
-                          onClick={() => setAttached((prev) => prev.filter((_, j) => j !== i))}>×</button>
-                </span>
-              ))}
-            </div>
-          )}
           {skillsOpen && skills.length > 0 && (
             <div className="skills-menu">
               {skills.map((s) => (
@@ -409,35 +398,50 @@ export default function Workspace({ auth, onLogout }) {
               ))}
             </div>
           )}
-          <div className="composer-inner">
-            <input ref={fileRef} type="file" multiple hidden onChange={onFilesPicked} />
-            <button className="btn-attach" title="Upload files or media to this session"
-                    onClick={() => fileRef.current?.click()}
-                    disabled={!activeId || streaming || uploading}>
-              {uploading ? '…' : '📎'}
-            </button>
-            {skills.length > 0 && (
-              <button className={'btn-attach' + (skillsOpen ? ' on' : '')} title="Insert a saved prompt (skill)"
-                      onClick={() => setSkillsOpen((o) => !o)} disabled={!activeId || streaming}>
-                ✨
-              </button>
+          <div className="composer-box">
+            {attached.length > 0 && (
+              <div className="attach-row">
+                {attached.map((f, i) => (
+                  <span className="attach-chip" key={f.name + i}>
+                    📎 {f.name}
+                    <button className="attach-x" title="Remove"
+                            onClick={() => setAttached((prev) => prev.filter((_, j) => j !== i))}>×</button>
+                  </span>
+                ))}
+              </div>
             )}
+            <input ref={fileRef} type="file" multiple hidden onChange={onFilesPicked} />
             <textarea
               ref={inputRef}
-              rows={1} value={input} placeholder={activeId ? 'Message the agent…' : 'Create a session first'}
+              rows={1} value={input} placeholder={activeId ? 'Message Floowpay AI…' : 'Create a session first'}
               disabled={!activeId || streaming}
               onChange={(e) => setInput(e.target.value)} onKeyDown={onKeyDown}
             />
-            {streaming ? (
-              <button className="btn-stop" onClick={stopTurn} title="Stop the agent">
-                ■ Stop
-              </button>
-            ) : (
-              <button className="btn-send" onClick={send}
-                      disabled={!activeId || (!input.trim() && attached.length === 0)}>
-                Send
-              </button>
-            )}
+            <div className="composer-toolbar">
+              <div className="composer-tools">
+                <button className="tool-btn" title="Attach files or media"
+                        onClick={() => fileRef.current?.click()}
+                        disabled={!activeId || streaming || uploading}>
+                  {uploading ? '…' : '📎'}
+                </button>
+                {skills.length > 0 && (
+                  <button className={'tool-btn' + (skillsOpen ? ' on' : '')} title="Insert a saved prompt (skill)"
+                          onClick={() => setSkillsOpen((o) => !o)} disabled={!activeId || streaming}>
+                    ✨
+                  </button>
+                )}
+                <select className="model-select mini" value={model} disabled={streaming}
+                        onChange={(e) => changeModel(e.target.value)} title="Model">
+                  {models.map((m) => <option key={m} value={m}>{m}</option>)}
+                </select>
+              </div>
+              {streaming ? (
+                <button className="btn-send-circle stop" onClick={stopTurn} title="Stop">■</button>
+              ) : (
+                <button className="btn-send-circle" onClick={send} title="Send"
+                        disabled={!activeId || (!input.trim() && attached.length === 0)}>↑</button>
+              )}
+            </div>
           </div>
         </div>
       </div>
