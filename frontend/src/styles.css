@@ -941,3 +941,9 @@ button {
 }
 .new-mcp-form input:focus, .new-mcp-form select:focus { border-color: var(--accent); }
 .new-mcp-form .btn-primary.compact { align-self: flex-start; }
+.mcp-env {
+  padding: 10px 13px; font-size: 13px;
+  border: 1px solid var(--border); border-radius: 10px; outline: none;
+  font-family: var(--mono); resize: vertical; min-height: 44px;
+}
+.mcp-env:focus { border-color: var(--accent); }
