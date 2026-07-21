@@ -70,6 +70,27 @@ export async function uploadFiles(token, sid, fileList) {
   }))
 }
 
+// --- skills (prompt presets) ---
+
+export async function getSkills(token) {
+  return jsonOrThrow(await fetch(`${BASE}/skills`, { headers: authHeaders(token) }))
+}
+
+export async function adminCreateSkill(token, skill) {
+  return jsonOrThrow(await fetch(`${BASE}/admin/skills`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+    body: JSON.stringify(skill),
+  }))
+}
+
+export async function adminDeleteSkill(token, name) {
+  return jsonOrThrow(await fetch(`${BASE}/admin/skills/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+    headers: authHeaders(token),
+  }))
+}
+
 // List the files in a session's workspace (uploaded + agent-created).
 export async function listFiles(token, sid) {
   return jsonOrThrow(await fetch(`${BASE}/sessions/${sid}/files`, { headers: authHeaders(token) }))
