@@ -37,6 +37,8 @@ export default function Workspace({ auth, onLogout }) {
   const [installed, setInstalled] = useState([])  // agent skills (SKILL.md folders)
   const [installedOpen, setInstalledOpen] = useState(false)
   const [installing, setInstalling] = useState(false)
+  const [menuIndex, setMenuIndex] = useState(0)     // keyboard selection in the slash/✨ menu
+  const [slashDismissed, setSlashDismissed] = useState(false)  // Esc closes the "/" menu
   const isAdmin = user.role === 'admin'
 
   async function refreshSkills() {
@@ -265,13 +267,27 @@ export default function Workspace({ auth, onLogout }) {
       }
     }
 
+    // Snapshot the workspace so we can show which files this turn produced.
+    const beforeFiles = new Map(files.map((f) => [f.name, f.size]))
+
     const ctrl = streamTurn(token, activeId, shown + note, model, images, onEvent)
     streamRef.current = ctrl
     await ctrl.done
     streamRef.current = null
     setStreaming(false)
-    patchAssistant((a) => { const { _streaming, ...rest } = a; return rest })
-    refreshFiles()  // the agent may have created files this turn
+
+    // Diff the workspace: files that are new or changed this turn become
+    // downloadable chips under the reply ("return files").
+    let produced = []
+    try {
+      const after = (await listFiles(token, activeId)).files
+      produced = after.filter((f) => beforeFiles.get(f.name) !== f.size)
+      setFiles(after)
+    } catch { /* ignore */ }
+    patchAssistant((a) => {
+      const { _streaming, ...rest } = a
+      return produced.length ? { ...rest, produced } : rest
+    })
   }
 
   // auto-scroll to the newest content
@@ -279,7 +295,39 @@ export default function Workspace({ auth, onLogout }) {
     if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight
   }, [messages, streaming])
 
+  // --- slash-command menu: typing "/" (optionally + a query, no spaces) at
+  //     the start of an empty composer suggests skills to insert. The ✨
+  //     button opens the same menu unfiltered. ---
+  const slashMatch = /^\/(\S*)$/.exec(input)
+  const slashActive = !slashDismissed && slashMatch !== null
+  const slashQuery = slashActive ? slashMatch[1].toLowerCase() : ''
+  const menuSkills = slashActive
+    ? skills.filter((s) => s.name.toLowerCase().includes(slashQuery) ||
+                           (s.description || '').toLowerCase().includes(slashQuery))
+    : (skillsOpen ? skills : [])
+  const menuOpen = menuSkills.length > 0 && (slashActive || skillsOpen)
+
+  function pickSkill(s) {
+    setInput(s.template)
+    setSkillsOpen(false)
+    setSlashDismissed(true)  // don't reopen for the inserted text
+    setMenuIndex(0)
+    inputRef.current?.focus()
+  }
+
+  function onInputChange(e) {
+    setInput(e.target.value)
+    setMenuIndex(0)
+    if (slashDismissed) setSlashDismissed(false)  // let a fresh "/" reopen it
+  }
+
   function onKeyDown(e) {
+    if (menuOpen) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); setMenuIndex((i) => (i + 1) % menuSkills.length); return }
+      if (e.key === 'ArrowUp') { e.preventDefault(); setMenuIndex((i) => (i - 1 + menuSkills.length) % menuSkills.length); return }
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); pickSkill(menuSkills[Math.min(menuIndex, menuSkills.length - 1)]); return }
+      if (e.key === 'Escape') { e.preventDefault(); setSkillsOpen(false); setSlashDismissed(true); return }
+    }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
   }
 
@@ -371,6 +419,7 @@ export default function Workspace({ auth, onLogout }) {
             ) : (
               messages.map((m, i) => (
                 <Message key={i} msg={m} hideTools={hideTools}
+                         onDownload={(name) => downloadFile(token, activeId, name)}
                          streaming={m.role === 'assistant' && m._streaming && streaming} />
               ))
             )}
@@ -387,12 +436,15 @@ export default function Workspace({ auth, onLogout }) {
         )}
 
         <div className="composer">
-          {skillsOpen && skills.length > 0 && (
+          {menuOpen && (
             <div className="skills-menu">
-              {skills.map((s) => (
-                <button className="skill-item" key={s.name}
-                        onClick={() => { setInput(s.template); setSkillsOpen(false); inputRef.current?.focus() }}>
-                  <span className="skill-name">{s.name}</span>
+              {slashActive && <div className="skills-menu-hint">Skills — ↑↓ to move, ↵ to insert, esc to dismiss</div>}
+              {menuSkills.map((s, i) => (
+                <button className={'skill-item' + (i === Math.min(menuIndex, menuSkills.length - 1) ? ' active' : '')}
+                        key={s.name}
+                        onMouseEnter={() => setMenuIndex(i)}
+                        onClick={() => pickSkill(s)}>
+                  <span className="skill-name">/{s.name}</span>
                   {s.description && <span className="skill-desc">{s.description}</span>}
                 </button>
               ))}
@@ -413,9 +465,10 @@ export default function Workspace({ auth, onLogout }) {
             <input ref={fileRef} type="file" multiple hidden onChange={onFilesPicked} />
             <textarea
               ref={inputRef}
-              rows={1} value={input} placeholder={activeId ? 'Message Floowpay AI…' : 'Create a session first'}
+              rows={1} value={input}
+              placeholder={activeId ? 'Message Floowpay AI…  (press / for skills)' : 'Create a session first'}
               disabled={!activeId || streaming}
-              onChange={(e) => setInput(e.target.value)} onKeyDown={onKeyDown}
+              onChange={onInputChange} onKeyDown={onKeyDown}
             />
             <div className="composer-toolbar">
               <div className="composer-tools">

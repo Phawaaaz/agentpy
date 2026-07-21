@@ -9,7 +9,7 @@ import { renderMarkdown } from '../markdown.js'
 // by one quiet line: a "Thinking…" indicator while the turn is still working,
 // then a collapsed "N steps" summary you can click to expand. Blocked/error
 // steps still surface so failures and the sandbox block stay visible.
-export default function Message({ msg, streaming, hideTools }) {
+export default function Message({ msg, streaming, hideTools, onDownload }) {
   const [showSteps, setShowSteps] = useState(false)
 
   if (msg.role === 'user') {
@@ -57,6 +57,18 @@ export default function Message({ msg, streaming, hideTools }) {
         <div className="bubble-assistant">
           <span dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.text) }} />
           {streaming && <span className="cursor" />}
+        </div>
+      )}
+
+      {msg.produced && msg.produced.length > 0 && (
+        <div className="produced-files">
+          <div className="produced-label">Files</div>
+          {msg.produced.map((f) => (
+            <button className="file-chip" key={f.name} title="Download"
+                    onClick={() => onDownload && onDownload(f.name)}>
+              📄 {f.name} <span className="dl">↓</span>
+            </button>
+          ))}
         </div>
       )}
 
