@@ -3,6 +3,8 @@
 #   pip install -r requirements.txt -r requirements-server.txt
 fastapi>=0.110
 uvicorn[standard]>=0.29
+# JWT auth: issue/verify session tokens (auth/tokens.py imports `jwt`).
+PyJWT>=2.8
 # psycopg (v3) for a Postgres HARNESS_DB_URL in production; SQLite needs nothing.
 # psycopg[binary]>=3.1
 # File uploads (FastAPI UploadFile needs this)

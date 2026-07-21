@@ -136,7 +136,32 @@ HARNESS_FALLBACK_MODEL=gemini/gemini-2.0-flash,groq/llama-3.3-70b-versatile
 Anthropic and any OpenAI-compatible endpoint work with no code change.
 `demo/scripted` stays in the dropdown as a safety option.
 
-## 8. Backups
+## 8. Connecting MCP tool servers (GitHub, files, …)
+
+Admins can give **every** session extra tools by connecting [MCP](https://modelcontextprotocol.io)
+servers from **Admin dashboard → MCP tool servers**. Their tools show up
+namespaced as `mcp__<server>__<tool>` and persist (they reconnect on restart).
+Two transports:
+
+- **URL (http/sse)** — a hosted MCP endpoint. Nothing to install; paste the URL.
+- **stdio** — a command the backend launches. The backend image ships Node, so
+  `npx`-based servers work out of the box. Examples (enter in the form):
+
+  | Server | transport | command | args |
+  |--------|-----------|---------|------|
+  | GitHub | stdio | `npx` | `-y @modelcontextprotocol/server-github` |
+  | Files  | stdio | `npx` | `-y @modelcontextprotocol/server-filesystem /data/workspaces` |
+
+  A GitHub server needs a token — add it in the form's **env** as
+  `GITHUB_PERSONAL_ACCESS_TOKEN`. The filesystem server can only reach paths
+  **inside the backend container** (e.g. the `workspaces` volume at
+  `/data/workspaces`), not a user's laptop.
+
+After **Add & connect**, a green dot and the tool list mean it's live; a red dot
+shows the connect error so you can fix and retry. stdio servers run a command on
+the backend host, so this is admin-only.
+
+## 9. Backups
 
 Durable data is in two volumes: `pgdata` (database) and `workspaces` (files).
 
@@ -146,7 +171,7 @@ docker compose exec db pg_dump -U harness harness > backup-$(date +%F).sql
 
 Restore with `psql`; schedule with cron.
 
-## 9. Updating
+## 10. Updating
 
 ```bash
 cd agentpy && git pull && cd deploy && docker compose up -d --build
@@ -155,7 +180,7 @@ cd agentpy && git pull && cd deploy && docker compose up -d --build
 Database and workspaces are preserved (they're volumes); schema changes apply on
 boot.
 
-## 10. Hardening checklist
+## 11. Hardening checklist
 
 - [ ] Strong `POSTGRES_PASSWORD`, long random `HARNESS_JWT_SECRET`.
 - [ ] Deleted the seeded `alice`/`bob` accounts (§4).

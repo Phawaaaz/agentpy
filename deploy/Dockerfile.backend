@@ -5,6 +5,14 @@ FROM python:3.11-slim
 # Faster, quieter Python in a container.
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1
 
+# Node.js (+ npx) so admins can connect npx-based stdio MCP servers from the UI
+# (e.g. @modelcontextprotocol/server-github, server-filesystem). URL-based
+# (http/sse) MCP servers work without this; remove it to slim the image if you
+# only use hosted MCP servers.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends nodejs npm \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # Install dependencies first (better layer caching). psycopg[binary] is the
