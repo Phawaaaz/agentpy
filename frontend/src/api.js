@@ -129,6 +129,27 @@ export async function adminDeleteUser(token, username) {
   }))
 }
 
+// --- MCP tool servers (admin) ---
+
+export async function getMcpServers(token) {
+  return jsonOrThrow(await fetch(`${BASE}/admin/mcp`, { headers: authHeaders(token) }))
+}
+
+export async function adminCreateMcp(token, server) {
+  return jsonOrThrow(await fetch(`${BASE}/admin/mcp`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+    body: JSON.stringify(server),
+  }))
+}
+
+export async function adminDeleteMcp(token, name) {
+  return jsonOrThrow(await fetch(`${BASE}/admin/mcp/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+    headers: authHeaders(token),
+  }))
+}
+
 // Stream a turn. Calls onEvent(type, data) for every SSE frame; returns a
 // controller with abort(). Resolves the returned promise when the stream ends.
 export function streamTurn(token, sid, message, model, onEvent) {

@@ -35,6 +35,7 @@ import engine.workspace
 from auth.tokens import TokenError, issue_token, load_or_create_secret, verify_token
 from config import Config
 from context_engine.compaction import Conversation, make_provider_summarizer
+from engine.mcp_client import MCPManager, MCPServerConfig
 from engine.orchestrator import Orchestrator
 from engine.registry import registry
 from observability.usage_store import PersistentUsageTracker
@@ -42,7 +43,7 @@ from providers.factory import build_provider
 from providers.model_info import effective_context_budget, effective_max_tokens
 from server.demo_provider import DemoProvider
 from storage.db import make_engine
-from storage.models import ROLE_ADMIN, Session as SessionRow, UsageLog, User
+from storage.models import MCPServer, ROLE_ADMIN, Session as SessionRow, UsageLog, User
 from storage.session_store import DbSessionStore
 from storage.user_store import DbUserStore
 
@@ -79,6 +80,29 @@ def _safe_filename(name: str) -> str:
     return base[:120]
 
 
+_MCP_TRANSPORTS = ("http", "sse", "stdio")
+
+
+def _mcp_config_from_row(row: "MCPServer") -> MCPServerConfig:
+    return MCPServerConfig(
+        name=row.name, transport=row.transport,
+        command=row.command or None,
+        args=json.loads(row.args_json or "[]"),
+        env=json.loads(row.env_json or "{}") or None,
+        url=row.url or None,
+        risk=row.risk or None,
+    )
+
+
+def _mcp_row_public(row: "MCPServer") -> dict:
+    """Config summary safe to show in the admin UI (no env secrets)."""
+    return {
+        "name": row.name, "transport": row.transport,
+        "command": row.command, "args": json.loads(row.args_json or "[]"),
+        "url": row.url, "risk": row.risk,
+    }
+
+
 class Login(BaseModel):
     username: str
     password: str
@@ -101,6 +125,16 @@ class NewUser(BaseModel):
 
 class RoleUpdate(BaseModel):
     role: str  # "user" or "admin"
+
+
+class NewMCPServer(BaseModel):
+    name: str
+    transport: str = "http"  # "http" | "sse" | "stdio"
+    url: str = ""            # http / sse
+    command: str = ""        # stdio
+    args: list[str] = []     # stdio
+    env: dict[str, str] = {}  # stdio
+    risk: str = ""           # optional override: safe | write | dangerous
 
 
 @dataclass
@@ -128,6 +162,13 @@ def create_app(config: Config | None = None) -> FastAPI:
     # (user_id, sid) pairs whose current turn has been asked to stop.
     cancel_flags: set = set()
 
+    # MCP: one manager owns the live connections; its tools register onto the
+    # SAME global `registry` every turn's orchestrator reads, so an admin-added
+    # server's tools are available to all sessions (org-wide, like mcp.json).
+    # Last connect error per server name, surfaced in GET /admin/mcp.
+    mcp_manager = MCPManager(registry)
+    mcp_errors: dict[str, str] = {}
+
     # Env-aware model dropdown. When a real model is configured via
     # HARNESS_MODEL and we're NOT in offline mode, offer it and make it the
     # default -- so the demo talks to that provider using HARNESS_API_KEY /
@@ -144,6 +185,25 @@ def create_app(config: Config | None = None) -> FastAPI:
     for uname, pw in (("alice", "alice123"), ("bob", "bob123")):
         if not users.exists(uname):
             users.register(uname, pw)
+
+    def _connect_mcp(config: MCPServerConfig) -> dict:
+        """Connect (or reconnect) one MCP server, recording any failure so the
+        admin UI can show it. Never raises — a down server must not take the
+        app (or a startup) with it."""
+        try:
+            tools = mcp_manager.connect(config)
+            mcp_errors.pop(config.name, None)
+            return {"connected": True, "tools": tools, "error": None}
+        except Exception as exc:  # noqa: BLE001 -- surfaced to the admin, not fatal
+            mcp_errors[config.name] = str(exc)
+            return {"connected": False, "tools": [], "error": str(exc)}
+
+    # Reconnect any admin-configured MCP servers from previous runs.
+    from sqlalchemy import select as _sa_select
+    from sqlalchemy.orm import Session as _OrmSession
+    with _OrmSession(db_engine) as _db:
+        for _row in _db.execute(_sa_select(MCPServer)).scalars().all():
+            _connect_mcp(_mcp_config_from_row(_row))
 
     app = FastAPI(title="Agent Harness — Demo API")
     app.add_middleware(
@@ -191,6 +251,68 @@ def create_app(config: Config | None = None) -> FastAPI:
     @app.get("/models")
     def models(_p: Principal = Depends(principal)):
         return {"models": models_list, "default": default_model}
+
+    # --- MCP tool servers (admin-configured, org-wide) --------------------
+
+    @app.get("/admin/mcp")
+    def list_mcp(p: Principal = Depends(principal)):
+        _require_admin(p)
+        from sqlalchemy import select
+        from sqlalchemy.orm import Session as OrmSession
+        connected = mcp_manager.list_connected()  # name -> tool names
+        with OrmSession(db_engine) as db:
+            rows = db.execute(select(MCPServer).order_by(MCPServer.name)).scalars().all()
+            out = []
+            for row in rows:
+                info = _mcp_row_public(row)
+                info["tools"] = connected.get(row.name, [])
+                info["connected"] = row.name in connected
+                info["error"] = mcp_errors.get(row.name)
+                out.append(info)
+        return out
+
+    @app.post("/admin/mcp", status_code=201)
+    def create_mcp(body: NewMCPServer, p: Principal = Depends(principal)):
+        _require_admin(p)
+        name = _safe_filename(body.name).strip()
+        if not name:
+            raise HTTPException(400, "name is required")
+        transport = body.transport if body.transport in _MCP_TRANSPORTS else "http"
+        if transport in ("http", "sse") and not body.url.strip():
+            raise HTTPException(400, f"{transport} transport needs a url")
+        if transport == "stdio" and not body.command.strip():
+            raise HTTPException(400, "stdio transport needs a command")
+
+        from sqlalchemy.orm import Session as OrmSession
+        with OrmSession(db_engine) as db:
+            db.merge(MCPServer(
+                name=name, transport=transport,
+                command=body.command.strip(),
+                args_json=json.dumps(body.args or []),
+                env_json=json.dumps(body.env or {}),
+                url=body.url.strip(),
+                risk=body.risk.strip(),
+            ))
+            db.commit()
+            row = db.get(MCPServer, name)
+            # Connect now so the admin sees success/failure immediately. A
+            # failure is reported (not raised) — the config stays saved so it
+            # can retry after the server is reachable.
+            status_info = _connect_mcp(_mcp_config_from_row(row))
+            result = _mcp_row_public(row)
+        result.update(status_info)
+        return result
+
+    @app.delete("/admin/mcp/{name}", status_code=204)
+    def delete_mcp(name: str, p: Principal = Depends(principal)):
+        _require_admin(p)
+        mcp_manager.disconnect(name)
+        mcp_errors.pop(name, None)
+        from sqlalchemy import delete as sa_delete
+        from sqlalchemy.orm import Session as OrmSession
+        with OrmSession(db_engine) as db:
+            db.execute(sa_delete(MCPServer).where(MCPServer.name == name))
+            db.commit()
 
     # --- sessions ---------------------------------------------------------
 

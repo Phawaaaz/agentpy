@@ -62,3 +62,24 @@ class UsageLog(Base):
     # "what are they using it for" half of admin monitoring.
     task: Mapped[str] = mapped_column(Text, nullable=False, default="")
     created_at: Mapped[float] = mapped_column(Float, nullable=False, default=time.time)
+
+
+class MCPServer(Base):
+    """An admin-configured MCP tool server. Persisted so the servers an admin
+    wires up in the UI reconnect on startup and their tools stay available to
+    every session — the same org-wide model as the .harness/mcp.json file.
+
+    `args` and `env` are stored as JSON strings (SQLite has no array/dict
+    column); the server layer decodes them into an MCPServerConfig.
+    """
+
+    __tablename__ = "mcp_servers"
+
+    name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    transport: Mapped[str] = mapped_column(String(16), nullable=False, default="http")
+    command: Mapped[str] = mapped_column(String(512), nullable=False, default="")  # stdio
+    args_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")  # stdio
+    env_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")  # stdio
+    url: Mapped[str] = mapped_column(String(512), nullable=False, default="")  # sse/http
+    risk: Mapped[str] = mapped_column(String(16), nullable=False, default="")  # override
+    created_at: Mapped[float] = mapped_column(Float, nullable=False, default=time.time)
