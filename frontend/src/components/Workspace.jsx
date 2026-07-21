@@ -5,7 +5,7 @@ import Message from './Message.jsx'
 import AdminDashboard from './AdminDashboard.jsx'
 import {
   getModels, listSessions, createSession, deleteSession, getMessages, streamTurn, uploadFiles,
-  listFiles, downloadFile, cancelTurn,
+  listFiles, downloadFile, cancelTurn, getSkills,
 } from '../api.js'
 
 const LAST_SID_KEY = 'harness_demo_last_sid'
@@ -30,7 +30,16 @@ export default function Workspace({ auth, onLogout }) {
   const [uploading, setUploading] = useState(false)
   const [files, setFiles] = useState([])        // workspace files (for download)
   const [filesOpen, setFilesOpen] = useState(false)
+  const [skills, setSkills] = useState([])      // admin-defined prompt presets
+  const [skillsOpen, setSkillsOpen] = useState(false)
   const isAdmin = user.role === 'admin'
+
+  async function refreshSkills() {
+    try { setSkills(await getSkills(token)) } catch { /* ignore */ }
+  }
+  // Load on mount and whenever we return to chat — an admin may have just
+  // added or removed a skill in the dashboard.
+  useEffect(() => { if (view === 'chat') refreshSkills() /* eslint-disable-next-line */ }, [view])
 
   async function refreshFiles(sid = activeId) {
     if (!sid) return
@@ -330,6 +339,17 @@ export default function Workspace({ auth, onLogout }) {
               ))}
             </div>
           )}
+          {skillsOpen && skills.length > 0 && (
+            <div className="skills-menu">
+              {skills.map((s) => (
+                <button className="skill-item" key={s.name}
+                        onClick={() => { setInput(s.template); setSkillsOpen(false); inputRef.current?.focus() }}>
+                  <span className="skill-name">{s.name}</span>
+                  {s.description && <span className="skill-desc">{s.description}</span>}
+                </button>
+              ))}
+            </div>
+          )}
           <div className="composer-inner">
             <input ref={fileRef} type="file" multiple hidden onChange={onFilesPicked} />
             <button className="btn-attach" title="Upload files or media to this session"
@@ -337,6 +357,12 @@ export default function Workspace({ auth, onLogout }) {
                     disabled={!activeId || streaming || uploading}>
               {uploading ? '…' : '📎'}
             </button>
+            {skills.length > 0 && (
+              <button className={'btn-attach' + (skillsOpen ? ' on' : '')} title="Insert a saved prompt (skill)"
+                      onClick={() => setSkillsOpen((o) => !o)} disabled={!activeId || streaming}>
+                ✨
+              </button>
+            )}
             <textarea
               ref={inputRef}
               rows={1} value={input} placeholder={activeId ? 'Message the agent…' : 'Create a session first'}

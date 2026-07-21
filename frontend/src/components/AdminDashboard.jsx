@@ -1,5 +1,8 @@
 import { useEffect, useState } from 'react'
-import { getAdminStats, adminCreateUser, adminSetRole, adminDeleteUser } from '../api.js'
+import {
+  getAdminStats, adminCreateUser, adminSetRole, adminDeleteUser,
+  getSkills, adminCreateSkill, adminDeleteSkill,
+} from '../api.js'
 
 // Read-mostly admin view: live per-user usage (sessions, messages, model
 // calls, tokens, cost) with a global totals row, plus lightweight user
@@ -10,15 +13,46 @@ export default function AdminDashboard({ token, me, onClose }) {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [form, setForm] = useState({ username: '', password: '', role: 'user' })
+  const [skills, setSkills] = useState([])
+  const [skillForm, setSkillForm] = useState({ name: '', description: '', template: '' })
 
   async function refresh() {
     setError('')
     try {
       setData(await getAdminStats(token))
     } catch (e) { setError(e.message || 'Failed to load stats') }
+    try {
+      setSkills(await getSkills(token))
+    } catch { /* skills are optional; ignore */ }
   }
 
   useEffect(() => { refresh() /* eslint-disable-next-line */ }, [])
+
+  async function createSkill(e) {
+    e.preventDefault()
+    if (!skillForm.name.trim() || !skillForm.template.trim()) return
+    setBusy(true); setError('')
+    try {
+      await adminCreateSkill(token, {
+        name: skillForm.name.trim(),
+        description: skillForm.description.trim(),
+        template: skillForm.template,
+      })
+      setSkillForm({ name: '', description: '', template: '' })
+      await refresh()
+    } catch (e) { setError(e.message || 'Could not save skill') }
+    finally { setBusy(false) }
+  }
+
+  async function removeSkill(name) {
+    if (!confirm(`Delete skill "${name}"?`)) return
+    setBusy(true); setError('')
+    try {
+      await adminDeleteSkill(token, name)
+      await refresh()
+    } catch (e) { setError(e.message || 'Could not delete skill') }
+    finally { setBusy(false) }
+  }
 
   async function createUser(e) {
     e.preventDefault()
@@ -129,6 +163,41 @@ export default function AdminDashboard({ token, me, onClose }) {
             </tbody>
           </table>
         </div>
+      </div>
+
+      <div className="admin-card">
+        <div className="admin-card-title">Skills (prompt presets)</div>
+        <p className="admin-hint">
+          Saved prompts everyone can insert from the ✨ menu in the composer.
+        </p>
+        {skills.length > 0 && (
+          <div className="skill-list">
+            {skills.map((s) => (
+              <div className="skill-row" key={s.name}>
+                <div className="skill-row-text">
+                  <span className="skill-row-name">{s.name}</span>
+                  {s.description && <span className="skill-row-desc">{s.description}</span>}
+                  <span className="skill-row-tmpl">{s.template}</span>
+                </div>
+                <button className="btn-mini danger" disabled={busy}
+                        onClick={() => removeSkill(s.name)}>Delete</button>
+              </div>
+            ))}
+          </div>
+        )}
+        <form className="new-skill-form" onSubmit={createSkill}>
+          <input placeholder="name (e.g. summarize)" value={skillForm.name}
+                 onChange={(e) => setSkillForm({ ...skillForm, name: e.target.value })} />
+          <input placeholder="short description (optional)" value={skillForm.description}
+                 onChange={(e) => setSkillForm({ ...skillForm, description: e.target.value })} />
+          <textarea placeholder="prompt template inserted into the composer…" rows={3}
+                    value={skillForm.template}
+                    onChange={(e) => setSkillForm({ ...skillForm, template: e.target.value })} />
+          <button className="btn-primary compact"
+                  disabled={busy || !skillForm.name.trim() || !skillForm.template.trim()}>
+            Save skill
+          </button>
+        </form>
       </div>
 
       <div className="admin-card">

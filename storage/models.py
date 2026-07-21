@@ -62,3 +62,15 @@ class UsageLog(Base):
     # "what are they using it for" half of admin monitoring.
     task: Mapped[str] = mapped_column(Text, nullable=False, default="")
     created_at: Mapped[float] = mapped_column(Float, nullable=False, default=time.time)
+
+
+class Skill(Base):
+    """An admin-defined prompt preset the web UI offers users (name +
+    description + the template text inserted into the composer)."""
+
+    __tablename__ = "skills"
+
+    name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    description: Mapped[str] = mapped_column(String(256), nullable=False, default="")
+    template: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False, default=time.time)

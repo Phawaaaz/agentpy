@@ -716,6 +716,7 @@ button {
 }
 .btn-attach:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
 .btn-attach:disabled { opacity: 0.5; cursor: default; }
+.btn-attach.on { color: var(--accent); background: var(--accent-soft); border-color: #e0e3ff; }
 
 .attach-row {
   max-width: 820px;
@@ -800,3 +801,78 @@ button {
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
+
+/* ---------------- Skills (prompt presets) ---------------- */
+
+/* Composer dropdown that lists skills to insert. */
+.skills-menu {
+  max-width: 820px;
+  margin: 0 auto 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+  max-height: 260px;
+  overflow-y: auto;
+}
+.skill-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 9px 12px;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.skill-item:hover { background: var(--accent-soft); }
+.skill-name { font-size: 14px; font-weight: 600; color: var(--text); }
+.skill-desc { font-size: 12px; color: var(--text-muted); }
+
+/* Admin skills management list. */
+.admin-hint { margin: 0; padding: 0 20px 10px; font-size: 13px; color: var(--text-muted); }
+.skill-list { display: flex; flex-direction: column; }
+.skill-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+}
+.skill-row-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.skill-row-name { font-size: 14px; font-weight: 600; color: var(--text); }
+.skill-row-desc { font-size: 13px; color: var(--text-muted); }
+.skill-row-tmpl {
+  font-size: 12px;
+  font-family: var(--mono);
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+.new-skill-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px 20px;
+  border-top: 1px solid var(--border);
+}
+.new-skill-form input, .new-skill-form textarea {
+  padding: 10px 13px;
+  font-size: 15px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  outline: none;
+  font-family: inherit;
+  resize: vertical;
+}
+.new-skill-form input:focus, .new-skill-form textarea:focus { border-color: var(--accent); }
+.new-skill-form .btn-primary.compact { align-self: flex-start; }

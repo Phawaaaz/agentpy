@@ -42,7 +42,7 @@ from providers.factory import build_provider
 from providers.model_info import effective_context_budget, effective_max_tokens
 from server.demo_provider import DemoProvider
 from storage.db import make_engine
-from storage.models import ROLE_ADMIN, Session as SessionRow, UsageLog, User
+from storage.models import ROLE_ADMIN, Session as SessionRow, Skill, UsageLog, User
 from storage.session_store import DbSessionStore
 from storage.user_store import DbUserStore
 
@@ -101,6 +101,12 @@ class NewUser(BaseModel):
 
 class RoleUpdate(BaseModel):
     role: str  # "user" or "admin"
+
+
+class NewSkill(BaseModel):
+    name: str
+    description: str = ""
+    template: str
 
 
 @dataclass
@@ -191,6 +197,39 @@ def create_app(config: Config | None = None) -> FastAPI:
     @app.get("/models")
     def models(_p: Principal = Depends(principal)):
         return {"models": models_list, "default": default_model}
+
+    # --- skills: admin-defined prompt presets everyone can use ------------
+
+    @app.get("/skills")
+    def list_skills(_p: Principal = Depends(principal)):
+        from sqlalchemy import select
+        from sqlalchemy.orm import Session as OrmSession
+        with OrmSession(db_engine) as db:
+            rows = db.execute(select(Skill).order_by(Skill.name)).scalars().all()
+            return [{"name": s.name, "description": s.description, "template": s.template}
+                    for s in rows]
+
+    @app.post("/admin/skills", status_code=201)
+    def create_skill(body: NewSkill, p: Principal = Depends(principal)):
+        _require_admin(p)
+        name = _safe_filename(body.name).strip()
+        if not name or not body.template.strip():
+            raise HTTPException(400, "name and template are required")
+        from sqlalchemy.orm import Session as OrmSession
+        with OrmSession(db_engine) as db:
+            db.merge(Skill(name=name, description=body.description.strip(),
+                           template=body.template))  # upsert by name
+            db.commit()
+        return {"name": name, "description": body.description.strip(), "template": body.template}
+
+    @app.delete("/admin/skills/{name}", status_code=204)
+    def delete_skill(name: str, p: Principal = Depends(principal)):
+        _require_admin(p)
+        from sqlalchemy import delete as sa_delete
+        from sqlalchemy.orm import Session as OrmSession
+        with OrmSession(db_engine) as db:
+            db.execute(sa_delete(Skill).where(Skill.name == name))
+            db.commit()
 
     # --- sessions ---------------------------------------------------------
 
