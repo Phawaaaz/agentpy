@@ -23,7 +23,7 @@ export default function Sidebar({ user, sessions, activeId, onSelect, onNew, onD
                  className={'session-item' + (s.session_id === activeId ? ' active' : '')}
                  onClick={() => onSelect(s.session_id)}>
               <div style={{ minWidth: 0 }}>
-                <div className="sname">Session {shortId(s.session_id)}</div>
+                <div className="sname" title={s.title || undefined}>{s.title || 'New chat'}</div>
                 <div className="smodel">{s.model}</div>
               </div>
               <button className="sdel" title="Delete session"

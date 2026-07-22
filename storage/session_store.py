@@ -25,6 +25,32 @@ def _safe_id(session_id: str) -> str:
     return "".join(c for c in session_id if c.isalnum() or c in ("-", "_"))
 
 
+_TITLE_MAX = 48
+
+
+def _title_from_snapshot(snapshot_json: str) -> str:
+    """A short title from the first user message in a saved snapshot."""
+    try:
+        messages = json.loads(snapshot_json).get("messages", [])
+    except (ValueError, AttributeError):
+        return ""
+    for m in messages:
+        if m.get("role") != "user":
+            continue
+        content = m.get("content") or ""
+        if isinstance(content, list):  # vision turns carry content blocks
+            content = " ".join(b.get("text", "") for b in content
+                                if isinstance(b, dict) and b.get("type") == "text")
+        # Drop the injected "[Files are now in your workspace: ...]" note and
+        # collapse whitespace so the title reads like what the user typed.
+        text = content.split("\n[Files are now in your workspace")[0]
+        text = " ".join(text.split()).strip()
+        if not text:
+            continue
+        return text[:_TITLE_MAX] + ("…" if len(text) > _TITLE_MAX else "")
+    return ""
+
+
 class DbSessionStore:
     """Save/load/list/delete one user's conversations. Bound to a user_id
     at construction so callers cannot accidentally reach across users."""
@@ -65,6 +91,20 @@ class DbSessionStore:
             return sorted(
                 db.scalars(select(SessionRow.id).where(SessionRow.user_id == self.user_id))
             )
+
+    def titles(self) -> dict[str, str]:
+        """A short human title per session, derived from its first user
+        message (so the sidebar reads like the conversation, not a timestamp).
+        Empty sessions get "" — the caller can fall back to "New chat"."""
+        out: dict[str, str] = {}
+        with OrmSession(self.engine) as db:
+            rows = db.execute(
+                select(SessionRow.id, SessionRow.snapshot_json)
+                .where(SessionRow.user_id == self.user_id)
+            )
+            for sid, snap in rows:
+                out[sid] = _title_from_snapshot(snap)
+        return out
 
     def delete(self, session_id: str) -> bool:
         """Remove a saved session. Returns False if it didn't exist."""
