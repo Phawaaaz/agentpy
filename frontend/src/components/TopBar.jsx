@@ -2,10 +2,14 @@ export default function TopBar({ sandboxOn, title,
                                 hideTools, onToggleHideTools,
                                 fileCount, filesOpen, onToggleFiles,
                                 skillCount, skillsOpen, onToggleSkills,
-                                github, onConnectGithub, onUnlinkGithub }) {
+                                github, onConnectGithub, onUnlinkGithub, onHelp }) {
   return (
     <div className="topbar">
       <div className="title">{title}</div>
+
+      <button className="focus-toggle" onClick={onHelp} title="How to use Floowpay AI">
+        ? Help
+      </button>
 
       {github && github.available && (
         github.connected ? (
