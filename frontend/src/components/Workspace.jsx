@@ -307,6 +307,9 @@ export default function Workspace({ auth, onLogout }) {
       const { _streaming, ...rest } = a
       return produced.length ? { ...rest, produced } : rest
     })
+    // A new session gets its title from the first message — refresh the list
+    // so the sidebar + header stop saying "New chat".
+    refreshSessions()
   }
 
   // auto-scroll to the newest content
@@ -350,7 +353,8 @@ export default function Workspace({ auth, onLogout }) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
   }
 
-  const title = activeId ? `Session ${activeId.split('-')[1] || ''}` : 'No session selected'
+  const activeSession = sessions.find((s) => s.session_id === activeId)
+  const title = activeId ? (activeSession?.title || 'New chat') : 'No session selected'
 
   return (
     <div className="app">

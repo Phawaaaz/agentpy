@@ -619,7 +619,9 @@ def create_app(config: Config | None = None) -> FastAPI:
     @app.get("/sessions")
     def list_sessions(p: Principal = Depends(principal)):
         store = DbSessionStore(db_engine, p.user_id)
-        return [{"session_id": sid, "model": session_models.get(sid, "demo/scripted")}
+        titles = store.titles()
+        return [{"session_id": sid, "model": session_models.get(sid, "demo/scripted"),
+                 "title": titles.get(sid) or ""}
                 for sid in store.list_ids()]
 
     @app.post("/sessions")
