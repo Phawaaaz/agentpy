@@ -174,6 +174,7 @@ export default function AdminDashboard({ token, me, onClose }) {
             <thead>
               <tr>
                 <th>User</th><th>Role</th>
+                <th>GitHub</th><th className="num">Skills</th>
                 <th className="num">Sessions</th><th className="num">Messages</th>
                 <th className="num">Calls</th><th className="num">Prompt</th>
                 <th className="num">Completion</th><th className="num">Tokens</th>
@@ -185,6 +186,8 @@ export default function AdminDashboard({ token, me, onClose }) {
                 <tr key={u.username}>
                   <td className="uname-cell">{u.username}{u.username === me ? ' (you)' : ''}</td>
                   <td><span className={'role-pill ' + u.role}>{u.role}</span></td>
+                  <td>{u.github ? <span className="gh-cell">🐙 @{u.github}</span> : <span className="muted-cell">—</span>}</td>
+                  <td className="num">{u.skills || 0}</td>
                   <td className="num">{u.sessions}</td>
                   <td className="num">{u.messages}</td>
                   <td className="num">{u.calls}</td>
@@ -203,7 +206,7 @@ export default function AdminDashboard({ token, me, onClose }) {
               ))}
               {t && (
                 <tr className="totals-row">
-                  <td>Totals</td><td></td>
+                  <td>Totals</td><td></td><td></td><td></td>
                   <td className="num">{t.sessions}</td>
                   <td className="num">{t.messages}</td>
                   <td className="num">{t.calls}</td>

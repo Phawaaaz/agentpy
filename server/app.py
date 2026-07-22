@@ -830,7 +830,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     @app.get("/admin/stats")
     def admin_stats(p: Principal = Depends(principal)):
         _require_admin(p)
-        return _collect_stats(db_engine)
+        return _collect_stats(db_engine, config)
 
     @app.post("/admin/users", status_code=201)
     def admin_create_user(body: NewUser, p: Principal = Depends(principal)):
@@ -882,14 +882,16 @@ def _fmt(event: str, data: dict) -> str:
 
 # --- admin data access (module-level so it's easy to test) ----------------
 
-def _collect_stats(engine) -> dict:
-    """Per-user rows (sessions, messages, model calls, tokens, cost) plus a
-    global totals row. Lists every user, including those with no activity."""
+def _collect_stats(engine, config=None) -> dict:
+    """Per-user rows (sessions, messages, model calls, tokens, cost, plus
+    GitHub connection and installed-skill count) and a global totals row.
+    Lists every user, including those with no activity."""
     from sqlalchemy import func, select
     from sqlalchemy.orm import Session as OrmSession
 
     with OrmSession(engine) as db:
         users = list(db.execute(select(User.id, User.username, User.role)))
+        github = {r[0]: r[1] for r in db.execute(select(GitHubAccount.user_id, GitHubAccount.login))}
 
         # sessions + message counts per user (parse each snapshot once)
         sessions = {}   # user_id -> session count
@@ -918,8 +920,15 @@ def _collect_stats(engine) -> dict:
 
     rows, totals = [], {"sessions": 0, "messages": 0, "calls": 0,
                         "prompt_tokens": 0, "completion_tokens": 0, "cost_usd": 0.0}
+    from engine.builtin.agent_skills import list_installed_skills
     for uid, username, role in users:
         calls, pt, ct, cost = usage.get(uid, (0, 0, 0, 0.0))
+        skill_count = 0
+        if config is not None:
+            try:
+                skill_count = len(list_installed_skills(config.for_user(username).skills_dir))
+            except Exception:
+                pass
         row = {
             "username": username, "role": role,
             "sessions": sessions.get(uid, 0),
@@ -927,6 +936,8 @@ def _collect_stats(engine) -> dict:
             "calls": calls,
             "prompt_tokens": pt, "completion_tokens": ct,
             "total_tokens": pt + ct, "cost_usd": round(cost, 4),
+            "github": github.get(uid),          # login or None
+            "skills": skill_count,               # installed agent-skills
         }
         rows.append(row)
         for k in ("sessions", "messages", "calls", "prompt_tokens", "completion_tokens"):

@@ -3,6 +3,7 @@ import Sidebar from './Sidebar.jsx'
 import TopBar from './TopBar.jsx'
 import Message from './Message.jsx'
 import AdminDashboard from './AdminDashboard.jsx'
+import Help from './Help.jsx'
 import {
   getModels, listSessions, createSession, deleteSession, getMessages, streamTurn, uploadFiles,
   listFiles, downloadFile, cancelTurn, getSkills,
@@ -41,6 +42,7 @@ export default function Workspace({ auth, onLogout }) {
   const [menuIndex, setMenuIndex] = useState(0)     // keyboard selection in the slash/✨ menu
   const [slashDismissed, setSlashDismissed] = useState(false)  // Esc closes the "/" menu
   const [github, setGithub] = useState({ available: false, connected: false, login: null })
+  const [helpOpen, setHelpOpen] = useState(false)
   const isAdmin = user.role === 'admin'
 
   async function refreshGithub() {
@@ -374,6 +376,7 @@ export default function Workspace({ auth, onLogout }) {
           skillsOpen={installedOpen}
           onToggleSkills={() => { const n = !installedOpen; setInstalledOpen(n); if (n) refreshInstalled() }}
           github={github} onConnectGithub={connectGithub} onUnlinkGithub={unlinkGithub}
+          onHelp={() => setHelpOpen(true)}
         />
 
         {filesOpen && (
@@ -517,6 +520,8 @@ export default function Workspace({ auth, onLogout }) {
         </div>
       </div>
       )}
+
+      {helpOpen && <Help onClose={() => setHelpOpen(false)} />}
     </div>
   )
 }
