@@ -46,8 +46,6 @@ export default function Login({ onLogin }) {
         <button className="btn-primary" disabled={busy || !username || !password}>
           {busy ? 'Signing in…' : 'Sign in'}
         </button>
-
-        <p className="login-hint">Demo accounts: alice / bob</p>
       </form>
     </div>
   )
