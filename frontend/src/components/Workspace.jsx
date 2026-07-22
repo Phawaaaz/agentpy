@@ -365,7 +365,7 @@ export default function Workspace({ auth, onLogout }) {
               <button className="btn-ghost sm" onClick={() => refreshFiles()}>↻</button>
             </div>
             {files.length === 0 ? (
-              <div className="files-empty">No files yet. Upload one, or ask the agent to create one.</div>
+              <div className="files-empty">No files yet. Upload one, or ask Floowpay AI to create one.</div>
             ) : (
               files.map((f) => (
                 <button className="file-row" key={f.name} onClick={() => downloadFile(token, activeId, f.name)}
@@ -407,14 +407,14 @@ export default function Workspace({ auth, onLogout }) {
           <div className="chat-inner">
             {!activeId ? (
               <div className="empty-chat">
-                <h2>Welcome, {user.username}</h2>
-                <p>Create a new session to start chatting with the agent.</p>
+                <h2>Welcome to Floowpay AI, {user.username}</h2>
+                <p>Start a new chat to put the agent to work.</p>
               </div>
             ) : messages.length === 0 ? (
               <div className="empty-chat">
-                <h2>New session</h2>
-                <p>Try: <code>create a file listing the planets, then show me its contents</code></p>
-                <p>Or: <code>read /etc/passwd</code> to watch the sandbox block it.</p>
+                <h2>What can Floowpay AI do for you?</h2>
+                <p>Ask it to work with your files and data, run tasks, or use a skill.</p>
+                <p className="empty-hint">Type <code>/</code> for saved prompts · 📎 to attach files · 🧩 to add a skill</p>
               </div>
             ) : (
               messages.map((m, i) => (
