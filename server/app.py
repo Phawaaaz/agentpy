@@ -321,15 +321,31 @@ def create_app(config: Config | None = None) -> FastAPI:
     # the list as an on-stage safety switch (deterministic, no network).
     env_model = os.getenv("HARNESS_MODEL")
     real_model = env_model if (env_model and not FAKE_ALL) else None
-    models_list = list(DEMO_MODELS)
-    if real_model and real_model not in models_list:
-        models_list.insert(1, real_model)  # after demo/scripted
-    default_model = real_model or "demo/scripted"
+    if real_model:
+        # Production: offer only the configured model + its fallback chain, so
+        # the picker shows real, usable models (no demo/scripted, no
+        # smorgasbord of providers the operator has no key for).
+        fallbacks = [m.strip() for m in os.getenv("HARNESS_FALLBACK_MODEL", "").split(",") if m.strip()]
+        models_list = [real_model] + [m for m in fallbacks if m != real_model]
+        default_model = real_model
+    else:
+        # Offline / no model configured: the scripted provider + the sample list.
+        models_list = list(DEMO_MODELS)
+        default_model = "demo/scripted"
 
-    # Seed demo accounts.
-    for uname, pw in (("alice", "alice123"), ("bob", "bob123")):
-        if not users.exists(uname):
-            users.register(uname, pw)
+    # Bootstrap accounts. In production set HARNESS_ADMIN_USERNAME/PASSWORD to
+    # seed a single real admin (no demo accounts). Otherwise seed alice/bob so
+    # dev, tests, and the offline demo can log in out of the box.
+    admin_user = os.getenv("HARNESS_ADMIN_USERNAME")
+    admin_pass = os.getenv("HARNESS_ADMIN_PASSWORD")
+    if admin_user and admin_pass:
+        if not users.exists(admin_user):
+            users.register(admin_user, admin_pass)
+            _set_role(db_engine, admin_user, ROLE_ADMIN)
+    else:
+        for uname, pw in (("alice", "alice123"), ("bob", "bob123")):
+            if not users.exists(uname):
+                users.register(uname, pw)
 
     def _connect_mcp(config: MCPServerConfig) -> dict:
         """Connect (or reconnect) one MCP server, recording any failure so the

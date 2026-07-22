@@ -26,6 +26,10 @@ cp .env.example .env
 POSTGRES_PASSWORD=<a strong random password>
 HARNESS_JWT_SECRET=<paste output of: python -c "import secrets;print(secrets.token_urlsafe(48))">
 
+# --- your admin login (recommended: skips the demo alice/bob accounts) ---
+HARNESS_ADMIN_USERNAME=<your admin username>
+HARNESS_ADMIN_PASSWORD=<a strong password>
+
 # --- port (80 = http://server/) ---
 HTTP_PORT=80
 ```
@@ -62,14 +66,15 @@ Then log in and confirm **live**:
 
 `demo/scripted` stays in the model picker as an always-works fallback.
 
-## 5. Secure the accounts (before real users)
+## 5. Accounts
 
-Seeded logins are public knowledge — replace them:
-1. Log in as **alice / alice123**.
-2. **⚙ Admin dashboard → Add user**: make your own **admin** account + one
-   `user` account per teammate.
-3. Log out; log back in as your new admin.
-4. **Delete `alice` and `bob`.**
+If you set `HARNESS_ADMIN_USERNAME`/`PASSWORD` in step 2, that's your only
+account and there are **no demo logins** — just log in and add your team from
+**⚙ Admin dashboard → Add user**.
+
+If you left them unset, the demo `alice/alice123` (admin) and `bob/bob123`
+accounts are seeded — log in as alice, create your real admin + teammates, then
+**delete `alice` and `bob`**.
 
 ## 6. HTTPS (for anything past localhost)
 

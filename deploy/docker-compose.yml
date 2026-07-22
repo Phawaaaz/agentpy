@@ -34,6 +34,9 @@ services:
       # Fixed signing secret so logins survive restarts (generate a long random
       # value — see .env.example). Without it, a random one is used each boot.
       HARNESS_JWT_SECRET: ${HARNESS_JWT_SECRET:?set HARNESS_JWT_SECRET in .env}
+      # Seed one real admin (and skip the demo alice/bob accounts) when set.
+      HARNESS_ADMIN_USERNAME: ${HARNESS_ADMIN_USERNAME:-}
+      HARNESS_ADMIN_PASSWORD: ${HARNESS_ADMIN_PASSWORD:-}
       # Keep the agent inside its per-session workspace (off the host).
       HARNESS_CONFINE_WORKSPACE: "true"
       HARNESS_WORKSPACE_DIR: /data/workspaces
