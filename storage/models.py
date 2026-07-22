@@ -95,3 +95,16 @@ class MCPServer(Base):
     url: Mapped[str] = mapped_column(String(512), nullable=False, default="")  # sse/http
     risk: Mapped[str] = mapped_column(String(16), nullable=False, default="")  # override
     created_at: Mapped[float] = mapped_column(Float, nullable=False, default=time.time)
+
+
+class GitHubAccount(Base):
+    """A user's connected GitHub account (OAuth). One row per user; holds the
+    access token used by the github_request tool on that user's behalf. The
+    token is per-user, so each person acts as their own GitHub identity."""
+
+    __tablename__ = "github_accounts"
+
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    login: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    token: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False, default=time.time)

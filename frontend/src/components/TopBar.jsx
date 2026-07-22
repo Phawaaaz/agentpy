@@ -1,10 +1,25 @@
 export default function TopBar({ sandboxOn, title,
                                 hideTools, onToggleHideTools,
                                 fileCount, filesOpen, onToggleFiles,
-                                skillCount, skillsOpen, onToggleSkills }) {
+                                skillCount, skillsOpen, onToggleSkills,
+                                github, onConnectGithub, onUnlinkGithub }) {
   return (
     <div className="topbar">
       <div className="title">{title}</div>
+
+      {github && github.available && (
+        github.connected ? (
+          <button className="focus-toggle on" onClick={onUnlinkGithub}
+                  title={`Connected as @${github.login} — click to disconnect`}>
+            🐙 @{github.login}
+          </button>
+        ) : (
+          <button className="focus-toggle" onClick={onConnectGithub}
+                  title="Authorize Floowpay AI to act on your GitHub">
+            🐙 Connect GitHub
+          </button>
+        )
+      )}
 
       <button className={'focus-toggle' + (skillsOpen ? ' on' : '')} onClick={onToggleSkills}
               title="Install and manage agent skills (SKILL.md folders the agent can run)">

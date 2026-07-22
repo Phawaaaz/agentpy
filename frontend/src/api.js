@@ -116,6 +116,23 @@ export async function uninstallSkill(token, name) {
   }))
 }
 
+// --- GitHub (per-user OAuth connection) ---
+
+export async function getGithubStatus(token) {
+  return jsonOrThrow(await fetch(`${BASE}/github/status`, { headers: authHeaders(token) }))
+}
+
+// The OAuth start is a top-level browser navigation (can't send a Bearer
+// header), so the JWT rides as a query param. Send the browser here to begin
+// the "Authorize on GitHub" flow; GitHub redirects back to the app.
+export function githubConnectUrl(token) {
+  return `${BASE}/oauth/github/start?token=${encodeURIComponent(token)}`
+}
+
+export async function disconnectGithub(token) {
+  await fetch(`${BASE}/github`, { method: 'DELETE', headers: authHeaders(token) })
+}
+
 // List the files in a session's workspace (uploaded + agent-created).
 export async function listFiles(token, sid) {
   return jsonOrThrow(await fetch(`${BASE}/sessions/${sid}/files`, { headers: authHeaders(token) }))
