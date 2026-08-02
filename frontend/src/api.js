@@ -133,6 +133,16 @@ export async function disconnectGithub(token) {
   await fetch(`${BASE}/github`, { method: 'DELETE', headers: authHeaders(token) })
 }
 
+// Clone a GitHub repo (owner/name) into the session workspace so the agent
+// can work on real code. Uses the user's connected GitHub token server-side.
+export async function cloneRepo(token, sid, repo) {
+  return jsonOrThrow(await fetch(`${BASE}/sessions/${sid}/clone`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+    body: JSON.stringify({ repo }),
+  }))
+}
+
 // List the files in a session's workspace (uploaded + agent-created).
 export async function listFiles(token, sid) {
   return jsonOrThrow(await fetch(`${BASE}/sessions/${sid}/files`, { headers: authHeaders(token) }))

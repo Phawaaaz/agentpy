@@ -16,6 +16,7 @@ import os
 import queue
 import re
 import shutil
+import subprocess
 import tempfile
 import threading
 import zipfile
@@ -238,6 +239,39 @@ def _extract_context(provider, title: str, body: str) -> str:
         return ticket
 
 
+_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+
+
+def _clone_repo(dest_parent: str, repo: str, token: str | None) -> dict:
+    """git-clone `owner/name` into dest_parent/name so the agent works on real
+    code. Uses the token for private repos (server-side, so it never lands in
+    tool output or history). Returns {name, path, cloned, error}; the token is
+    redacted from any error text."""
+    repo = (repo or "").strip().removesuffix(".git")
+    if not _REPO_RE.match(repo):
+        return {"name": "", "cloned": False, "error": f"invalid repo '{repo}' (want owner/name)"}
+    name = repo.split("/")[-1]
+    dest = os.path.join(dest_parent, name)
+    os.makedirs(dest_parent, exist_ok=True)
+    if os.path.isdir(dest):
+        shutil.rmtree(dest)  # re-clone fresh
+    url = (f"https://x-access-token:{token}@github.com/{repo}.git" if token
+           else f"https://github.com/{repo}.git")
+    try:
+        proc = subprocess.run(
+            ["git", "clone", "--depth", "1", url, dest],
+            capture_output=True, text=True, timeout=120,
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        return {"name": name, "cloned": False, "error": f"clone failed: {exc}"}
+    if proc.returncode != 0:
+        err = (proc.stderr or "clone failed").strip()
+        if token:
+            err = err.replace(token, "***")  # never echo the token back
+        return {"name": name, "cloned": False, "error": err[-400:]}
+    return {"name": name, "path": f"./{name}", "cloned": True, "error": None}
+
+
 def _github_account(db_engine, user_id: int) -> "GitHubAccount | None":
     from sqlalchemy.orm import Session as OrmSession
     with OrmSession(db_engine) as db:
@@ -295,6 +329,10 @@ class NewSkill(BaseModel):
     name: str
     description: str = ""
     template: str
+
+
+class CloneRepo(BaseModel):
+    repo: str  # owner/name
 
 
 class Ticket(BaseModel):
@@ -627,13 +665,22 @@ def create_app(config: Config | None = None) -> FastAPI:
         # Step 1: strip the noisy ticket down to a clean technical brief.
         brief = _extract_context(provider, t.title, t.body)
 
+        # Check out the target repo so the agent edits real code.
+        checkout = ""
+        if t.repo:
+            wsdir = f"{user_config.workspace_dir}/{sid}"
+            cloned = _clone_repo(wsdir, t.repo, gh.token if gh else None)
+            checkout = (f" The repository is checked out at {cloned['path']} — edit the real "
+                        f"files there." if cloned["cloned"]
+                        else f" (Note: cloning {t.repo} failed: {cloned['error']}.)")
+
         tid = (t.id or sid)
         repo_hint = f" against the repository {t.repo}" if t.repo else ""
         task = (
             f"[Ticket {tid}] {t.title or 'Support ticket'}\n\n"
             f"A support ticket was filed. Here is the extracted technical brief:\n\n{brief}\n\n"
-            f"Diagnose and fix the issue in your sandboxed workspace. When you have a fix, "
-            f"open a GitHub pull request on a new branch named 'fix/ticket-{tid}' using the "
+            f"Diagnose and fix the issue in your sandboxed workspace.{checkout} When you have a "
+            f"fix, open a GitHub pull request on a new branch named 'fix/ticket-{tid}' using the "
             f"github_request tool{repo_hint}. Stop at the pull request for a human to review "
             f"and merge — do not attempt to merge it yourself."
         )
@@ -780,6 +827,19 @@ def create_app(config: Config | None = None) -> FastAPI:
             saved.append({"name": name, "size": len(data)})
         return {"session_id": sid, "files": saved}
 
+    @app.post("/sessions/{sid}/clone", status_code=201)
+    def clone_into_session(sid: str, body: CloneRepo, p: Principal = Depends(principal)):
+        """Clone a GitHub repo into this session's workspace so the agent can
+        work on real code. Uses the user's connected GitHub token for private
+        repos (server-side — the token never reaches the agent or the client)."""
+        _own_session_or_404(sid, p.user_id)
+        wsdir = _session_workspace(_username(p.user_id), sid)
+        gh = _github_account(db_engine, p.user_id)
+        result = _clone_repo(wsdir, body.repo, gh.token if gh else None)
+        if not result["cloned"]:
+            raise HTTPException(400, result["error"] or "clone failed")
+        return result
+
     @app.get("/sessions/{sid}/files")
     def list_files(sid: str, p: Principal = Depends(principal)):
         _own_session_or_404(sid, p.user_id)
@@ -789,7 +849,10 @@ def create_app(config: Config | None = None) -> FastAPI:
             for n in sorted(os.listdir(wsdir)):
                 fp = os.path.join(wsdir, n)
                 if os.path.isfile(fp):
-                    out.append({"name": n, "size": os.path.getsize(fp)})
+                    out.append({"name": n, "size": os.path.getsize(fp), "dir": False})
+                elif os.path.isdir(fp):
+                    # e.g. a cloned repo — show it so the user gets feedback.
+                    out.append({"name": n, "size": 0, "dir": True})
         return {"session_id": sid, "files": out}
 
     @app.get("/sessions/{sid}/files/{name}")

@@ -6,7 +6,7 @@ import AdminDashboard from './AdminDashboard.jsx'
 import Help from './Help.jsx'
 import {
   getModels, listSessions, createSession, deleteSession, getMessages, streamTurn, uploadFiles,
-  listFiles, downloadFile, cancelTurn, getSkills,
+  listFiles, downloadFile, cancelTurn, getSkills, cloneRepo,
   getInstalledSkills, installSkill, uninstallSkill,
   getGithubStatus, githubConnectUrl, disconnectGithub,
 } from '../api.js'
@@ -92,6 +92,17 @@ export default function Workspace({ auth, onLogout }) {
   async function refreshFiles(sid = activeId) {
     if (!sid) return
     try { setFiles((await listFiles(token, sid)).files) } catch { /* ignore */ }
+  }
+
+  async function cloneRepoIntoSession() {
+    if (!activeId) return
+    const repo = window.prompt('Clone a GitHub repo into this session (owner/name):')
+    if (!repo) return
+    setError('')
+    try {
+      await cloneRepo(token, activeId, repo.trim())
+      await refreshFiles()
+    } catch (err) { setError(err.message || 'Clone failed') }
   }
 
   function stopTurn() {
@@ -300,7 +311,7 @@ export default function Workspace({ auth, onLogout }) {
     let produced = []
     try {
       const after = (await listFiles(token, activeId)).files
-      produced = after.filter((f) => beforeFiles.get(f.name) !== f.size)
+      produced = after.filter((f) => !f.dir && beforeFiles.get(f.name) !== f.size)
       setFiles(after)
     } catch { /* ignore */ }
     patchAssistant((a) => {
@@ -387,17 +398,27 @@ export default function Workspace({ auth, onLogout }) {
           <div className="files-panel">
             <div className="files-head">
               <span>Workspace files</span>
-              <button className="btn-ghost sm" onClick={() => refreshFiles()}>↻</button>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button className="btn-ghost sm" onClick={cloneRepoIntoSession} title="Clone a GitHub repo into this session">⬇ Clone repo</button>
+                <button className="btn-ghost sm" onClick={() => refreshFiles()} title="Refresh">↻</button>
+              </div>
             </div>
             {files.length === 0 ? (
               <div className="files-empty">No files yet. Upload one, or ask Floowpay AI to create one.</div>
             ) : (
               files.map((f) => (
-                <button className="file-row" key={f.name} onClick={() => downloadFile(token, activeId, f.name)}
-                        title="Download">
-                  <span className="fname">{f.name}</span>
-                  <span className="fsize">{fmtSize(f.size)} ↓</span>
-                </button>
+                f.dir ? (
+                  <div className="file-row static" key={f.name}>
+                    <span className="fname">📁 {f.name}/</span>
+                    <span className="fsize">folder</span>
+                  </div>
+                ) : (
+                  <button className="file-row" key={f.name} onClick={() => downloadFile(token, activeId, f.name)}
+                          title="Download">
+                    <span className="fname">{f.name}</span>
+                    <span className="fsize">{fmtSize(f.size)} ↓</span>
+                  </button>
+                )
               ))
             )}
           </div>
