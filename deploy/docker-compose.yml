@@ -37,6 +37,10 @@ services:
       # Seed one real admin (and skip the demo alice/bob accounts) when set.
       HARNESS_ADMIN_USERNAME: ${HARNESS_ADMIN_USERNAME:-}
       HARNESS_ADMIN_PASSWORD: ${HARNESS_ADMIN_PASSWORD:-}
+      # Ticket intake webhook (autonomous support pipeline). A shared secret a
+      # ticketing system sends as X-Intake-Token, and the account fixes run as.
+      HARNESS_INTAKE_TOKEN: ${HARNESS_INTAKE_TOKEN:-}
+      HARNESS_INTAKE_USERNAME: ${HARNESS_INTAKE_USERNAME:-}
       # Keep the agent inside its per-session workspace (off the host).
       HARNESS_CONFINE_WORKSPACE: "true"
       HARNESS_WORKSPACE_DIR: /data/workspaces

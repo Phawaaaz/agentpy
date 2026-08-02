@@ -181,7 +181,34 @@ the top bar) — no token pasting. Set it up once:
    and the agent can then act on their GitHub (via the `github_request` tool) as
    *them* — per user, isolated. Without these vars the button simply doesn't show.
 
-## 10. Backups
+## 10. Autonomous ticket intake (support → PR)
+
+Turn a support ticket into a reviewed pull request automatically. A ticketing
+system (Zendesk, a form, a webhook, …) POSTs the ticket to `/intake`; the agent
+strips it to a clean technical brief, works in its sandbox, and opens a GitHub
+PR named `fix/ticket-<id>` — stopping there for a human to review and merge.
+
+Set in `.env`:
+
+```bash
+HARNESS_INTAKE_TOKEN=<a long random shared secret>
+HARNESS_INTAKE_USERNAME=support-bot   # the account fixes run as; connect its GitHub (§9)
+```
+
+Then point your ticketing system's webhook at it:
+
+```bash
+curl -X POST https://<your-domain>/intake \
+  -H "X-Intake-Token: $HARNESS_INTAKE_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"id":"1050","title":"Checkout 500","body":"...raw ticket text...","repo":"floowpay/api"}'
+```
+
+The response has the `session_id` (visible in that user's history), the extracted
+`brief`, and the agent's result. Without the token, `/intake` requires a normal
+user login instead. The PR is never auto-merged — a human always approves.
+
+## 11. Backups
 
 Durable data is in two volumes: `pgdata` (database) and `workspaces` (files).
 
@@ -191,7 +218,7 @@ docker compose exec db pg_dump -U harness harness > backup-$(date +%F).sql
 
 Restore with `psql`; schedule with cron.
 
-## 11. Updating
+## 12. Updating
 
 ```bash
 cd agentpy && git pull && cd deploy && docker compose up -d --build
@@ -200,7 +227,7 @@ cd agentpy && git pull && cd deploy && docker compose up -d --build
 Database and workspaces are preserved (they're volumes); schema changes apply on
 boot.
 
-## 12. Hardening checklist
+## 13. Hardening checklist
 
 - [ ] Strong `POSTGRES_PASSWORD`, long random `HARNESS_JWT_SECRET`.
 - [ ] Deleted the seeded `alice`/`bob` accounts (§4).
