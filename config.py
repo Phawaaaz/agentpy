@@ -143,6 +143,12 @@ class Config:
     # the GitHub OAuth callback. Unset = derive from the incoming request
     # (fine for localhost; set it in production behind a proxy).
     public_url: str | None = None
+    # Ticket intake (autonomous support pipeline). A shared secret a ticketing
+    # system sends as the X-Intake-Token header to POST /intake without a user
+    # login; intake_username is the account the resulting session + GitHub
+    # actions are attributed to. Unset = /intake requires a normal user JWT.
+    intake_token: str | None = None
+    intake_username: str | None = None
     # Tavily API key for the web_search tool; unset = DuckDuckGo fallback (D25).
     search_api_key: str | None = None
     # Workspace confinement (D27): when True, filesystem/shell tools are
@@ -250,6 +256,8 @@ class Config:
             github_client_id=get_val("HARNESS_GITHUB_CLIENT_ID", "github_client_id", cls.github_client_id) or None,
             github_client_secret=get_val("HARNESS_GITHUB_CLIENT_SECRET", "github_client_secret", cls.github_client_secret) or None,
             public_url=get_val("HARNESS_PUBLIC_URL", "public_url", cls.public_url) or None,
+            intake_token=get_val("HARNESS_INTAKE_TOKEN", "intake_token", cls.intake_token) or None,
+            intake_username=get_val("HARNESS_INTAKE_USERNAME", "intake_username", cls.intake_username) or None,
             confine_workspace=get_val("HARNESS_CONFINE_WORKSPACE", "confine_workspace", cls.confine_workspace, to_bool),
             workspace_dir=get_val("HARNESS_WORKSPACE_DIR", "workspace_dir", cls.workspace_dir),
             skills_dir=get_val("HARNESS_SKILLS_DIR", "skills_dir", cls.skills_dir),

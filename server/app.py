@@ -213,6 +213,31 @@ def _install_skill_zip(skills_root: str, data: bytes) -> dict:
         return {"name": name, "description": meta["description"]}
 
 
+_EXTRACT_SYSTEM = (
+    "You triage support tickets for an engineering team. Extract ONLY the "
+    "actionable technical facts from the ticket below: the actual problem, any "
+    "error messages / stack traces / codes, the affected feature or files, and "
+    "steps to reproduce. Ignore greetings, apologies, signatures, emotion, and "
+    "irrelevant chatter. Output a short, clean brief an engineer can act on."
+)
+
+
+def _extract_context(provider, title: str, body: str) -> str:
+    """The article's 'Context Extractor': a fast model call that strips a noisy
+    ticket down to the technical truth. Falls back to the raw ticket on any
+    error so intake never fails just because extraction did."""
+    ticket = (f"Title: {title}\n\n{body}" if title else body).strip()
+    try:
+        resp = provider.complete(
+            [{"role": "system", "content": _EXTRACT_SYSTEM},
+             {"role": "user", "content": ticket}],
+            [],
+        )
+        return (resp.text or "").strip() or ticket
+    except Exception:
+        return ticket
+
+
 def _github_account(db_engine, user_id: int) -> "GitHubAccount | None":
     from sqlalchemy.orm import Session as OrmSession
     with OrmSession(db_engine) as db:
@@ -270,6 +295,14 @@ class NewSkill(BaseModel):
     name: str
     description: str = ""
     template: str
+
+
+class Ticket(BaseModel):
+    body: str                 # the raw support ticket / bug report
+    title: str = ""
+    id: str | None = None     # external ticket id, used for the branch name
+    repo: str | None = None   # owner/repo the fix targets (optional hint)
+    model: str | None = None  # override the model for this run
 
 
 class NewMCPServer(BaseModel):
@@ -551,6 +584,84 @@ def create_app(config: Config | None = None) -> FastAPI:
             pass
         _store_github(db_engine, user_id, login, access_token)
         return RedirectResponse("/?github=connected")
+
+    # --- ticket intake: autonomous support pipeline (article's steps 1/3/4) --
+
+    def _resolve_intake_user(request: Request):
+        """Who this ticket is filed as: a ticketing system with the shared
+        X-Intake-Token acts as the configured intake user; otherwise a normal
+        Bearer login acts as itself."""
+        hdr = request.headers.get("X-Intake-Token")
+        if config.intake_token and hdr and hdr == config.intake_token:
+            if not config.intake_username:
+                raise HTTPException(500, "HARNESS_INTAKE_USERNAME is not configured")
+            uid = users.user_id(config.intake_username)
+            if uid is None:
+                raise HTTPException(500, f"intake user '{config.intake_username}' does not exist")
+            return uid, config.intake_username
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            try:
+                claims = verify_token(auth[7:], jwt_secret)
+            except TokenError as exc:
+                raise HTTPException(401, f"invalid token: {exc}")
+            return claims["user_id"], _username(claims["user_id"])
+        raise HTTPException(401, "provide X-Intake-Token or a Bearer token")
+
+    @app.post("/intake", status_code=201)
+    def intake(t: Ticket, request: Request):
+        uid, username = _resolve_intake_user(request)
+        model = t.model or default_model
+        user_config = config.for_user(username)
+        sid = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+
+        # Per-request isolation roots (own thread context) — same as a turn.
+        context_engine.memory_tool.set_memory_root(user_config.memory_dir)
+        engine.builtin.offload.set_offload_root(user_config.offload_dir)
+        engine.workspace.set_workspace_root(f"{user_config.workspace_dir}/{sid}")
+        engine.builtin.agent_skills.set_skills_root(user_config.skills_dir)
+        gh = _github_account(db_engine, uid)
+        engine.builtin.github_tools.set_github_token(gh.token if gh else None)
+
+        provider = _provider_for(model)
+        # Step 1: strip the noisy ticket down to a clean technical brief.
+        brief = _extract_context(provider, t.title, t.body)
+
+        tid = (t.id or sid)
+        repo_hint = f" against the repository {t.repo}" if t.repo else ""
+        task = (
+            f"[Ticket {tid}] {t.title or 'Support ticket'}\n\n"
+            f"A support ticket was filed. Here is the extracted technical brief:\n\n{brief}\n\n"
+            f"Diagnose and fix the issue in your sandboxed workspace. When you have a fix, "
+            f"open a GitHub pull request on a new branch named 'fix/ticket-{tid}' using the "
+            f"github_request tool{repo_hint}. Stop at the pull request for a human to review "
+            f"and merge — do not attempt to merge it yourself."
+        )
+
+        system_prompt = (user_config.system_prompt
+                         + engine.builtin.agent_skills.skills_catalog_text(user_config.skills_dir))
+        if gh:
+            system_prompt += (f"\n\n## GitHub\nThe user has connected GitHub (@{gh.login}). "
+                              f"Use the github_request tool to open the pull request.")
+        conv = Conversation(
+            system_prompt,
+            max_context_tokens=effective_context_budget(model, user_config.max_context_tokens),
+            keep_recent_messages=user_config.keep_recent_messages,
+            summarizer=make_provider_summarizer(provider),
+        )
+        usage = PersistentUsageTracker(db_engine, uid, session_id_fn=lambda: sid, task_fn=lambda: t.body)
+        agent = Orchestrator(
+            provider, registry, replace(user_config, permission_mode="allowlist"),
+            approver=lambda c, tl: True, on_event=lambda *a, **k: None,
+            conversation=conv, usage_tracker=usage, stream=False,
+        )
+        session_models[sid] = model
+        try:
+            answer = agent.run(task)
+        except Exception as exc:  # never 500 the webhook; record the failure
+            answer = f"[intake run failed: {exc}]"
+        DbSessionStore(db_engine, uid).save(sid, conv)
+        return {"session_id": sid, "brief": brief, "answer": answer}
 
     # --- MCP tool servers (admin-configured, org-wide) --------------------
 
