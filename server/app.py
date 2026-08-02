@@ -34,6 +34,7 @@ import context_engine.memory_tool
 import engine.builtin.agent_skills  # noqa: F401  (register use_skill tool)
 import engine.builtin.filesystem  # noqa: F401  (register tools)
 import engine.builtin.github_tools  # noqa: F401  (register github_request tool)
+import engine.builtin.knowledge  # noqa: F401  (register search_knowledge tool)
 import engine.builtin.git_tool  # noqa: F401
 import engine.builtin.offload
 import engine.builtin.planning  # noqa: F401
@@ -665,14 +666,22 @@ def create_app(config: Config | None = None) -> FastAPI:
         # Step 1: strip the noisy ticket down to a clean technical brief.
         brief = _extract_context(provider, t.title, t.body)
 
-        # Check out the target repo so the agent edits real code.
+        # Check out the target repo so the agent edits real code, and index it
+        # (hybrid docs/code stores) so it can search_knowledge before fixing.
         checkout = ""
+        wsdir = f"{user_config.workspace_dir}/{sid}"
+        engine.builtin.knowledge.set_knowledge_root(f"{wsdir}/.rag")
         if t.repo:
-            wsdir = f"{user_config.workspace_dir}/{sid}"
             cloned = _clone_repo(wsdir, t.repo, gh.token if gh else None)
-            checkout = (f" The repository is checked out at {cloned['path']} — edit the real "
-                        f"files there." if cloned["cloned"]
-                        else f" (Note: cloning {t.repo} failed: {cloned['error']}.)")
+            if cloned["cloned"]:
+                try:
+                    engine.builtin.knowledge.build_index(wsdir, f"{wsdir}/.rag")
+                except Exception:
+                    pass
+                checkout = (f" The repository is checked out at {cloned['path']} and indexed — "
+                            f"use search_knowledge (docs + code) to understand it before editing.")
+            else:
+                checkout = f" (Note: cloning {t.repo} failed: {cloned['error']}.)"
 
         tid = (t.id or sid)
         repo_hint = f" against the repository {t.repo}" if t.repo else ""
@@ -838,6 +847,11 @@ def create_app(config: Config | None = None) -> FastAPI:
         result = _clone_repo(wsdir, body.repo, gh.token if gh else None)
         if not result["cloned"]:
             raise HTTPException(400, result["error"] or "clone failed")
+        # Build the hybrid docs/code index over the freshly cloned repo.
+        try:
+            result["indexed"] = engine.builtin.knowledge.build_index(wsdir, f"{wsdir}/.rag")
+        except Exception:  # indexing is best-effort; clone already succeeded
+            result["indexed"] = None
         return result
 
     @app.get("/sessions/{sid}/files")
@@ -850,8 +864,9 @@ def create_app(config: Config | None = None) -> FastAPI:
                 fp = os.path.join(wsdir, n)
                 if os.path.isfile(fp):
                     out.append({"name": n, "size": os.path.getsize(fp), "dir": False})
-                elif os.path.isdir(fp):
+                elif os.path.isdir(fp) and n != ".rag":
                     # e.g. a cloned repo — show it so the user gets feedback.
+                    # (.rag is the internal knowledge index; keep it hidden.)
                     out.append({"name": n, "size": 0, "dir": True})
         return {"session_id": sid, "files": out}
 
@@ -934,6 +949,10 @@ def create_app(config: Config | None = None) -> FastAPI:
                 # as them; None if they haven't connected GitHub.
                 gh = _github_account(db_engine, p.user_id)
                 engine.builtin.github_tools.set_github_token(gh.token if gh else None)
+                # Point the knowledge search at this session's index (built when
+                # a repo was cloned in).
+                rag_root = f"{user_config.workspace_dir}/{sid}/.rag"
+                engine.builtin.knowledge.set_knowledge_root(rag_root)
                 provider = _provider_for(model)
                 # Progressive disclosure: tell the model which skills are
                 # installed so it can call use_skill(name) when relevant.
@@ -943,6 +962,10 @@ def create_app(config: Config | None = None) -> FastAPI:
                     system_prompt += (f"\n\n## GitHub\nThe user has connected their GitHub account "
                                       f"(@{gh.login}). Use the github_request tool to act on GitHub "
                                       f"on their behalf when relevant.")
+                if engine.builtin.knowledge.has_index(rag_root):
+                    system_prompt += ("\n\n## Repository knowledge\nA repo is indexed for this "
+                                      "session. Use the search_knowledge tool (docs + code) to "
+                                      "understand how a feature works before editing.")
                 conv = Conversation(
                     system_prompt,
                     max_context_tokens=effective_context_budget(model, user_config.max_context_tokens),
