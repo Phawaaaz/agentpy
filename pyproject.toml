@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentpy"
+version = "0.1.0"
+description = "Floowpay AI — an autonomous agent harness (terminal CLI + web/API server)."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "phawaaaz" }]
+# CLI runtime deps. The web server pulls extras (see [project.optional-dependencies]).
+dependencies = [
+    "anthropic>=0.40.0",
+    "openai>=1.40.0",
+    "python-dotenv>=1.0.0",
+    "mcp>=1.2.0",
+    "pyyaml>=6.0",
+    "sqlalchemy>=2.0",
+    "PyJWT>=2.8",
+]
+
+[project.optional-dependencies]
+# Only needed to run `agentpy serve` (the FastAPI web/API backend).
+server = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "python-multipart>=0.0.9",
+    "httpx>=0.27",
+    "psycopg[binary]>=3.1",
+]
+
+[project.scripts]
+agentpy = "agentpy_cli:main"
+
+[tool.setuptools]
+py-modules = ["config", "agentpy_cli"]
+
+[tool.setuptools.packages.find]
+include = [
+    "auth*", "context_engine*", "engine*", "interfaces*", "multiagent*",
+    "observability*", "pipeline*", "providers*", "storage*", "server*",
+]
+exclude = ["tests*", "scripts*", "frontend*", "deploy*"]

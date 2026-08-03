@@ -4,6 +4,32 @@ A small, model-independent agentic harness: an LLM wrapped in a loop that lets i
 use tools (read/write files, run commands) to complete real tasks. Built to start
 minimal and grow into a company-wide coding + automation assistant.
 
+## Install (as a command, no source clone)
+
+Install it like any CLI — [pipx](https://pipx.pypa.io) gives you an isolated
+global `agentpy` command:
+
+```bash
+pipx install git+https://github.com/Phawaaaz/agentpy        # or from a published/private index: pipx install agentpy
+agentpy                 # start the terminal agent
+agentpy --version
+```
+
+Prefer plain pip? `pip install git+https://github.com/Phawaaaz/agentpy` then run `agentpy`.
+
+To also run the web/API server from the same package:
+
+```bash
+pipx install "agentpy[server]"    # or: pip install "agentpy[server]"
+agentpy serve                     # FastAPI backend on :8000
+```
+
+> The browser UI (React frontend + Postgres) is the container deploy in
+> [`deploy/`](deploy/) — see [deploy/LAUNCH.md](deploy/LAUNCH.md). `agentpy serve`
+> is the API backend on its own; `agentpy` is the standalone terminal agent.
+
+For local development from a clone: `pip install -e '.[server]'`.
+
 ## Documentation
 
 - [AGENTS.md](AGENTS.md) — **start here if you're an AI coding assistant** (vendor-neutral instructions)

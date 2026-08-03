@@ -513,7 +513,7 @@ def _login(store: DbUserStore, max_attempts: int = 3) -> str:
         return env_user
 
     print("=" * 60)
-    print("  Agentic Harness  —  sign in")
+    print("  Floowpay AI  —  sign in")
     print("=" * 60)
     for attempt in range(max_attempts):
         username = (env_user or input("username: ")).strip()
@@ -631,7 +631,7 @@ def main() -> None:
     mcp_manager = MCPManager(registry)
 
     print("=" * 60)
-    print("  Agentic Harness  —  Phase 2 (CLI)")
+    print("  Floowpay AI  —  terminal")
     print(f"  user: {username}")
     print(f"  model: {config.model}")
     print(f"  permission mode: {config.permission_mode}")
