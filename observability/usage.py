@@ -19,6 +19,8 @@ PRICING: dict[str, tuple[float, float]] = {
     "gpt-4o-mini": (0.15, 0.60),
     "gpt-4o": (2.50, 10.0),
     "o1": (15.0, 60.0),
+    "gpt-5.6-sol": (5.0, 30.0),
+    "gpt-sol-6": (5.0, 30.0),
 }
 
 

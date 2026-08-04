@@ -22,7 +22,7 @@ class TestYAMLAndPipelinePR(unittest.TestCase):
         # Clean environment variables that could interfere
         self.env_patches = {}
         for key in list(os.environ.keys()):
-            if key.startswith("HARNESS_"):
+            if key.startswith("HARNESS_") or key.startswith("OPENAI_"):
                 self.env_patches[key] = patch.dict(os.environ, {}, clear=False)
                 del os.environ[key]
 
@@ -108,6 +108,21 @@ pipeline:
         finally:
             for k in blanks:
                 del os.environ[k]
+
+    def test_openai_env_vars_fallback(self):
+        """Standard OPENAI_ API keys, models, and base URLs should act as fallbacks."""
+        os.environ["OPENAI_MODEL"] = "gpt-5.6-sol"
+        os.environ["OPENAI_API_KEY"] = "sk-fake-key"
+        os.environ["OPENAI_BASE_URL"] = "https://agentrouter.org/v1"
+        try:
+            config = Config.load()
+            self.assertEqual(config.model, "gpt-5.6-sol")
+            self.assertEqual(config.api_key, "sk-fake-key")
+            self.assertEqual(config.base_url, "https://agentrouter.org/v1")
+        finally:
+            del os.environ["OPENAI_MODEL"]
+            del os.environ["OPENAI_API_KEY"]
+            del os.environ["OPENAI_BASE_URL"]
 
     @patch("pipeline.worktree.create_worktree")
     @patch("pipeline.worktree.repo_root")

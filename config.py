@@ -229,11 +229,15 @@ class Config:
                 return type_conv(yaml_val) if type_conv else yaml_val
             return default
 
+        model_val = get_val("HARNESS_MODEL", "model", None) or os.getenv("OPENAI_MODEL") or cls.model
+        api_key_val = get_val("HARNESS_API_KEY", "api_key", None) or os.getenv("OPENAI_API_KEY") or cls.api_key
+        base_url_val = get_val("HARNESS_BASE_URL", "base_url", None) or os.getenv("OPENAI_BASE_URL") or cls.base_url
+
         return cls(
-            model=get_val("HARNESS_MODEL", "model", cls.model),
+            model=model_val,
             system_prompt=get_val("HARNESS_SYSTEM_PROMPT", "system_prompt", cls.system_prompt),
-            api_key=get_val("HARNESS_API_KEY", "api_key", cls.api_key) or None,
-            base_url=get_val("HARNESS_BASE_URL", "base_url", cls.base_url) or None,
+            api_key=api_key_val or None,
+            base_url=base_url_val or None,
             fallback_model=get_val("HARNESS_FALLBACK_MODEL", "fallback_model", cls.fallback_model) or None,
             permission_mode=get_val("HARNESS_PERMISSION_MODE", "permission_mode", cls.permission_mode),
             quiet=get_val("HARNESS_QUIET", "quiet", cls.quiet, to_bool),
