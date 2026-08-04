@@ -6,6 +6,8 @@ Groq, Together, vLLM, etc. and the same code talks to them.
 """
 
 import json
+import re
+import time
 
 import openai
 from openai import OpenAI
@@ -30,6 +32,27 @@ _RETRYABLE = (
 # bounded number of times before giving up -- at which point a configured
 # fallback model can take over.
 _TOOL_RETRY_ATTEMPTS = 3
+
+
+def parse_failed_generation(text: str):
+    """Parse XML/tag-based tool calls from a failed generation string.
+    
+    Supports:
+      <function=tool_name>{"arg": "val"}</function>
+      <function=tool_name={"arg": "val"}</function>
+    """
+    match = re.search(r'<function=(\w+)=?(.*?)</function>', text, re.DOTALL)
+    if not match:
+        return None
+    tool_name = match.group(1)
+    args_str = match.group(2).strip()
+    if args_str.startswith('='):
+        args_str = args_str[1:].strip()
+    try:
+        arguments = json.loads(args_str)
+    except json.JSONDecodeError:
+        arguments = {}
+    return tool_name, arguments
 
 
 def _is_tool_use_failed(exc: Exception) -> bool:
@@ -81,7 +104,44 @@ class OpenAIProvider(Provider):
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
 
-        completion = self._create(lambda: self.client.chat.completions.create(**kwargs))
+        try:
+            completion = self._create(lambda: self.client.chat.completions.create(**kwargs))
+        except openai.BadRequestError as exc:
+            if _is_tool_use_failed(exc):
+                body = getattr(exc, "body", None)
+                failed_gen = None
+                if isinstance(body, dict):
+                    err = body.get("error")
+                    if isinstance(err, dict):
+                        failed_gen = err.get("failed_generation")
+                if failed_gen:
+                    parsed = parse_failed_generation(failed_gen)
+                    if parsed:
+                        tool_name, arguments = parsed
+                        tool_call_id = f"call_{int(time.time())}"
+                        tool_calls = [ToolCall(id=tool_call_id, name=tool_name, arguments=arguments)]
+                        assistant_message = {
+                            "role": "assistant",
+                            "content": f"Simulated call due to gateway parser rejection of: {failed_gen}",
+                            "tool_calls": [
+                                {
+                                    "id": tool_call_id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": tool_name,
+                                        "arguments": json.dumps(arguments),
+                                    },
+                                }
+                            ]
+                        }
+                        return Response(
+                            text=None,
+                            tool_calls=tool_calls,
+                            assistant_message=assistant_message,
+                            usage=None,
+                        )
+            raise
+
         message = completion.choices[0].message
 
         tool_calls: list[ToolCall] = []
@@ -150,7 +210,44 @@ class OpenAIProvider(Provider):
                 kwargs.pop("stream_options", None)
                 return self.client.chat.completions.create(**kwargs)
 
-        stream = self._create(_create)
+        try:
+            stream = self._create(_create)
+        except openai.BadRequestError as exc:
+            if _is_tool_use_failed(exc):
+                body = getattr(exc, "body", None)
+                failed_gen = None
+                if isinstance(body, dict):
+                    err = body.get("error")
+                    if isinstance(err, dict):
+                        failed_gen = err.get("failed_generation")
+                if failed_gen:
+                    parsed = parse_failed_generation(failed_gen)
+                    if parsed:
+                        tool_name, arguments = parsed
+                        tool_call_id = f"call_{int(time.time())}"
+                        tool_calls = [ToolCall(id=tool_call_id, name=tool_name, arguments=arguments)]
+                        assistant_message = {
+                            "role": "assistant",
+                            "content": f"Simulated call due to gateway parser rejection of: {failed_gen}",
+                            "tool_calls": [
+                                {
+                                    "id": tool_call_id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": tool_name,
+                                        "arguments": json.dumps(arguments),
+                                    },
+                                }
+                            ]
+                        }
+                        yield ("response", Response(
+                            text=None,
+                            tool_calls=tool_calls,
+                            assistant_message=assistant_message,
+                            usage=None,
+                        ))
+                        return
+            raise
 
         text_parts: list[str] = []
         # index -> {"id", "name", "args"} accumulated across fragments

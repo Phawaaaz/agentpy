@@ -79,10 +79,37 @@ def test_usage_for_user_last_task_is_per_session_single_query():
     print("  usage_for_user reports the correct per-session last task (one query) OK")
 
 
+def test_failed_generation_parser():
+    from providers.openai_provider import parse_failed_generation
+    
+    # Style 1: with '='
+    text1 = '<function=memory={"command": "create", "path": "global_access.md", "file_text": "Make the agent global to use it anywhere."}</function>'
+    parsed1 = parse_failed_generation(text1)
+    assert parsed1 is not None
+    name1, args1 = parsed1
+    assert name1 == "memory"
+    assert args1["command"] == "create"
+    assert args1["path"] == "global_access.md"
+
+    # Style 2: without '='
+    text2 = '<function=memory{"command": "view", "path": "activity.md", "view_range": [1, 100]}</function>'
+    parsed2 = parse_failed_generation(text2)
+    assert parsed2 is not None
+    name2, args2 = parsed2
+    assert name2 == "memory"
+    assert args2["command"] == "view"
+    assert args2["view_range"] == [1, 100]
+
+    # No match
+    assert parse_failed_generation("plain text") is None
+    print("  failed generation parsing handles various tag styles OK")
+
+
 def main():
     test_pipeline_fails_loud_on_sandbox_docker()
     test_delete_removes_workspace_directory()
     test_usage_for_user_last_task_is_per_session_single_query()
+    test_failed_generation_parser()
     print("FIXES TESTS PASSED")
 
 
